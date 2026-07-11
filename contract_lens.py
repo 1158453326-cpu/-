@@ -345,7 +345,7 @@ def generate_history_excel(records: list[dict[str, Any]]) -> bytes:
 
 def render_email_settings() -> dict[str, Any]:
     """渲染邮件设置表单，返回配置字典。"""
-    with st.expander("📧 邮件发送设置", expanded=False):
+    with st.expander("📧 邮件发送设置（点击填写）", expanded=True):
         preset = st.selectbox("邮箱类型", list(SMTP_PRESETS.keys()), index=0)
 
         cfg = SMTP_PRESETS[preset]
@@ -1825,7 +1825,7 @@ def render_history_ui():
             st.caption("")
 
     # ── 邮件发送 ──
-    with st.expander("📧 发送审查历史到邮箱", expanded=False):
+    with st.expander("📧 发送审查历史到邮箱（点击填写）", expanded=True):
         email_cfg = render_email_settings()
 
         # 选择发送范围
