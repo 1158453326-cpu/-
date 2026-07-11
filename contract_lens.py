@@ -370,10 +370,13 @@ def render_email_settings() -> dict[str, Any]:
             port = st.number_input("端口", value=cfg["port"], min_value=1, max_value=65535)
         use_ssl = cfg["use_ssl"]
 
-        sender = st.text_input("发件邮箱", placeholder="your_email@qq.com")
-        password = st.text_input("授权码（非邮箱密码）", type="password",
-                                 placeholder="QQ邮箱→设置→账户→POP3/SMTP服务→生成授权码")
-        recipient = st.text_input("收件邮箱", placeholder="recipient@example.com")
+        sender = st.text_input("你的邮箱", placeholder="your_email@qq.com")
+        password = st.text_input("邮箱授权码", type="password",
+                                 placeholder="QQ邮箱→设置→账户→POP3/SMTP服务→生成授权码",
+                                 help="不是邮箱密码！QQ邮箱在 设置→账户→POP3/SMTP服务 里生成")
+        # 默认发给自己，也可改
+        recipient = st.text_input("收件邮箱（默认发给自己）", placeholder="留空则发到自己的邮箱",
+                                  help="默认与发件邮箱相同，留空即可")
 
         return {
             "server": server,
@@ -381,7 +384,7 @@ def render_email_settings() -> dict[str, Any]:
             "use_ssl": use_ssl,
             "sender": sender,
             "password": password,
-            "recipient": recipient,
+            "recipient": recipient if recipient.strip() else sender,
         }
 
 
@@ -391,11 +394,9 @@ def validate_email_settings(cfg: dict[str, Any]) -> list[str]:
     if not cfg.get("server"):
         missing.append("SMTP 服务器")
     if not cfg.get("sender"):
-        missing.append("发件邮箱")
+        missing.append("邮箱地址")
     if not cfg.get("password"):
         missing.append("授权码")
-    if not cfg.get("recipient"):
-        missing.append("收件邮箱")
     return missing
 
 
