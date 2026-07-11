@@ -1,0 +1,14 @@
+[server]
+# 监听所有接口（Streamlit Cloud 自动处理）
+headless = true
+# 禁止外部文件浏览
+enableStaticServing = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#1a1f36"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8fafc"
