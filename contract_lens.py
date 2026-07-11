@@ -26,8 +26,18 @@ from pathlib import Path
 from typing import Any
 
 # ─── 第三方库 ───────────────────────────────────────────
-import pandas as pd
 import streamlit as st
+
+# pandas 延迟加载（避免启动时 numpy C 扩展导致 segfault）
+class _LazyPandas:
+    _mod = None
+    def __getattr__(self, name):
+        if self._mod is None:
+            import pandas as _p
+            self._mod = _p
+        return getattr(self._mod, name)
+
+pd = _LazyPandas()
 
 # ─── 页面配置（仅 streamlit run 时生效） ─────────────────
 try:
