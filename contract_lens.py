@@ -804,8 +804,92 @@ def extract_confidentiality(text: str) -> str:
     return "未提取"
 
 
+def extract_contract_no(text: str) -> str:
+    """提取合同编号。"""
+    patterns = [
+        r"合同编号[：:：]\s*([^\n]{3,50})",
+        r"编号[：:：]\s*([A-Za-z0-9\-_]{3,50})",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val:
+            return val.strip()[:50]
+    return "未提取"
+
+
+def extract_sign_place(text: str) -> str:
+    """提取签订地点/签署地。"""
+    patterns = [
+        r"(?:签订|签署|签约).*?地[：:：点]?\s*([^\n。；;]{3,30})",
+        r"(?:签订|签署|签约).*?地点[：:：]?\s*([^\n。；;]{3,30})",
+        r"签订地[：:：]\s*([^\n]{3,30})",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val:
+            return val[:50]
+    return "未提取"
+
+
+def extract_warranty(text: str) -> str:
+    """提取质保期/维保期。"""
+    patterns = [
+        r"(?:质保|保修|维保).*?期[间限][：:：]?\s*([^\n。；;]{3,80})",
+        r"(?:质保|保修|维保).*?(\d+\s*(?:个)?[月年]).*?(?:免费|负责)",
+        r"质量.*?保证.*?期[：:：]?\s*([^\n。；;]{3,60})",
+        r"保修.*?(\d+\s*(?:个)?[月年])",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val and len(val) > 2:
+            return val[:80]
+    return "未提取"
+
+
+def extract_acceptance(text: str) -> str:
+    """提取验收标准/方式。"""
+    patterns = [
+        r"验收[：:：]?\s*([^\n。；;]{4,150})",
+        r"(?:验收.*?标准|验收.*?条件|验收.*?方式)[^\n。；;]*([^\n。；;]{4,100})",
+        r"验收.*?合格.*?(?:后|之日起)",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val and len(val) > 3:
+            return val[:150]
+    return "未提取"
+
+
+def extract_ip_ownership(text: str) -> str:
+    """提取知识产权归属。"""
+    patterns = [
+        r"知识产权[：:：]?\s*([^\n。；;]{4,200})",
+        r"知识产权.*?归[属]?\s*([^\n。；;]{3,100})",
+        r"(?:本项目|本合同).*?(?:知识产权|著作权|专利权).*?(?:归|属于)\s*([^\n。；;]{3,80})",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val and len(val) > 3:
+            return val[:200]
+    return "未提取"
+
+
+def extract_invoice(text: str) -> str:
+    """提取发票/税率信息。"""
+    patterns = [
+        r"发票[：:：]?\s*([^\n。；;]{4,150})",
+        r"(?:增值税|普通发票|专用发票).*?([^\n。；;]{3,80})",
+        r"税率[：:：]?\s*([^\n。；;]{2,30})",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val and len(val) > 2:
+            return val[:150]
+    return "未提取"
+
+
 def extract_all_fields(text: str) -> dict[str, Any]:
-    """一次性提取所有关键字段。"""
+    """一次性提取所有关键字段（产品经理视角全覆盖）。"""
     parties = extract_parties(text)
     amount = extract_amount(text)
     sign_date = extract_sign_date(text)
@@ -816,20 +900,32 @@ def extract_all_fields(text: str) -> dict[str, Any]:
     penalty = extract_penalty(text)
     dispute = extract_dispute_resolution(text)
     confidentiality = extract_confidentiality(text)
+    contract_no = extract_contract_no(text)
+    sign_place = extract_sign_place(text)
+    warranty = extract_warranty(text)
+    acceptance = extract_acceptance(text)
+    ip_ownership = extract_ip_ownership(text)
+    invoice = extract_invoice(text)
 
     return {
+        "合同编号": contract_no,
         "甲方": parties.get("甲方", "未提取"),
         "乙方": parties.get("乙方", "未提取"),
         "合同金额": amount or "未提取",
         "签署日期": sign_date,
+        "签订地点": sign_place,
         "生效条件": effective,
         "合同期限": term["期限"],
         "自动续约": term["自动续约"],
-        "付款节奏": payment,
         "交付物/服务范围": deliverables,
+        "付款节奏": payment,
+        "验收标准": acceptance,
         "违约金": penalty,
+        "质保/维保期": warranty,
         "争议解决地": dispute,
         "保密期限": confidentiality,
+        "知识产权归属": ip_ownership,
+        "发票/税率": invoice,
     }
 
 
@@ -1292,740 +1388,309 @@ def generate_pdf(
 
 
 # ═══════════════════════════════════════════════════════════
-#  第七部分：单个合同 UI
+#  第八部分：统一审查页面
 # ═══════════════════════════════════════════════════════════
 
-def render_single_file_ui():
-    """单个合同审查界面。"""
-    st.header("📄 单份合同审查")
-
-    uploaded = st.file_uploader(
-        "上传合同文件",
-        type=["pdf", "docx", "doc", "txt"],
-        key="single_upload",
-        help="支持 PDF、DOCX、TXT 格式",
-    )
-
-    if not uploaded:
-        # 空状态
-        st.info("👆 上传一份合同文件，开始快速审查")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("#### 📎 支持格式")
-            st.markdown("- PDF（文字层）\n- Word (.docx)\n- 纯文本 (.txt)")
-        with col2:
-            st.markdown("#### ⚡ 3秒出结果")
-            st.markdown("- 9大关键字段提取\n- 风险条款自动扫描\n- 智能摘要生成")
-        with col3:
-            st.markdown("#### 🔒 完全离线")
-            st.markdown("- 数据不出本地\n- 无需API密钥\n- 隐私安全无忧")
-        return
-
-    # 读取文件
-    file_bytes = uploaded.read()
-    text = extract_text(file_bytes, uploaded.name)
-
-    if text.startswith("[错误]") or text.startswith("[提示]"):
-        st.error(text)
-        return
-
-    # ── 处理 ──
-    with st.spinner("🔍 正在分析合同..."):
-        fields = extract_all_fields(text)
-        risks = scan_risks(text)
-        summary = generate_summary(text)
-
-    # ── 决策卡片 ──
-    st.markdown("---")
-
-    # 文件头部
-    st.markdown(f"""
-    <div class="file-header">
-        <div class="file-icon">📄</div>
-        <div>
-            <div class="file-name">{uploaded.name}</div>
-            <div class="file-meta">审查时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · 文本长度: {len(text):,} 字符</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── 四大核心指标卡片 ──
-    col_a, col_b, col_c, col_d = st.columns(4)
-
-    with col_a:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">甲方</div>
-            <div class="value" style="font-size:15px;">{fields['甲方'][:30]}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_b:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">乙方</div>
-            <div class="value" style="font-size:15px;">{fields['乙方'][:30]}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_c:
-        amount_display = fields['合同金额'].replace("¥", "") if fields['合同金额'] != "未提取" else "未提取"
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">合同金额</div>
-            <div class="value amount">{amount_display}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_d:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">合同期限</div>
-            <div class="value" style="font-size:14px;">{fields['合同期限'][:30]}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── 详细字段表格 ──
-    with st.expander("📋 全部提取字段", expanded=True):
-        detail_rows = []
-        for k, v in fields.items():
-            # 跳过已在卡片中展示的核心字段
-            detail_rows.append({"字段": k, "提取结果": v})
-        st.dataframe(
-            pd.DataFrame(detail_rows),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "字段": st.column_config.TextColumn("字段", width="small"),
-                "提取结果": st.column_config.TextColumn("提取结果", width="large"),
-            },
-        )
-
-    # ── 风险扫描 ──
+def render_full_card(filename: str, fields: dict[str, Any], risks: list[dict[str, Any]],
+                     summary: str, text: str, prefix: str = ""):
+    """渲染单份合同的完整决策卡片。"""
     risk_count = len(risks)
-    high_count = sum(1 for r in risks if "高风险" in r["severity"])
-    mid_count = sum(1 for r in risks if "中风险" in r["severity"])
-    low_count = sum(1 for r in risks if "注意" in r["severity"])
+    high_count = sum(1 for r in risks if "高风险" in r.get("severity", ""))
+    mid_count = sum(1 for r in risks if "中风险" in r.get("severity", ""))
+    low_count = sum(1 for r in risks if "注意" in r.get("severity", ""))
 
-    with st.expander(f"⚠️ 风险扫描（共 {risk_count} 条 · 🔴{high_count} 🟠{mid_count} 🟡{low_count}）", expanded=True):
-        if not risks:
-            st.success("✅ 未检测到明显风险条款")
+    with st.container():
+        st.markdown(f"### 📄 {filename}")
+        st.caption(f"字符数: {len(text):,} · 风险: 🔴{high_count} 🟠{mid_count} 🟡{low_count}")
+
+        # 核心四指标
+        col_a, col_b, col_c, col_d = st.columns(4)
+        with col_a:
+            st.markdown(f"""<div class="metric-card"><div class="label">甲方</div>
+                         <div class="value" style="font-size:14px;">{fields.get('甲方','—')[:20]}</div></div>""", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"""<div class="metric-card"><div class="label">乙方</div>
+                         <div class="value" style="font-size:14px;">{fields.get('乙方','—')[:20]}</div></div>""", unsafe_allow_html=True)
+        with col_c:
+            amt = fields.get("合同金额", "—").replace("¥", "")
+            st.markdown(f"""<div class="metric-card"><div class="label">合同金额</div>
+                         <div class="value amount">{amt}</div></div>""", unsafe_allow_html=True)
+        with col_d:
+            term_val = fields.get("合同期限", "—")
+            auto = fields.get("自动续约", "")
+            if "自动续" in auto:
+                term_val += " ⚠️续约"
+            st.markdown(f"""<div class="metric-card"><div class="label">合同期限</div>
+                         <div class="value" style="font-size:13px;">{term_val[:25]}</div></div>""", unsafe_allow_html=True)
+
+        # 完整字段
+        with st.expander("📋 完整字段", expanded=False):
+            rows = []
+            for k, v in fields.items():
+                rows.append({"字段": k, "提取结果": v})
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # 风险
+        if risks:
+            with st.expander(f"⚠️ 风险条款（{risk_count} 条）", expanded=(high_count > 0)):
+                for r in risks:
+                    st.markdown(f"""<div class="{r.get('css_class','risk-low')}">
+                    <strong>{r.get('severity','')} · {r.get('category','')}</strong>
+                    <div class="risk-quote">📌 {r.get('quote','')[:200]}</div></div>""", unsafe_allow_html=True)
         else:
-            for i, risk in enumerate(risks):
-                st.markdown(f"""
-                <div class="{risk['css_class']}">
-                    <strong>{risk['severity']} · {risk['category']}</strong>
-                    <div style="font-size:12px;color:#6b7280;margin-top:2px;">{risk['description']}</div>
-                    <div class="risk-quote">📌 原文: 「{risk['quote']}」</div>
-                </div>
-                """, unsafe_allow_html=True)
+            with st.expander("⚠️ 风险条款（0 条）", expanded=False):
+                st.success("✅ 未检测到明显风险")
 
-    # ── 摘要 ──
-    with st.expander("📝 合同摘要", expanded=True):
-        st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
+        # 摘要
+        with st.expander("📝 合同摘要", expanded=False):
+            st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
 
-    # ── 导出按钮 ──
-    st.markdown("---")
-    col_exp1, col_exp2, col_exp3, col_exp4 = st.columns([1, 1, 1, 3])
-    with col_exp1:
-        pdf_data = generate_pdf(uploaded.name, fields, risks, summary)
-        if pdf_data is not None:
-            st.download_button(
-                label="📥 导出 PDF",
-                data=pdf_data,
-                file_name=f"ContractLens_{Path(uploaded.name).stem}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-    with col_exp2:
-        # Excel 导出
-        df_export = pd.DataFrame([
-            {"字段": k, "提取结果": v} for k, v in fields.items()
-        ])
-        excel_buf = io.BytesIO()
-        with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
-            df_export.to_excel(writer, sheet_name="合同字段", index=False)
-            if risks:
-                pd.DataFrame(risks).to_excel(writer, sheet_name="风险条款", index=False)
-        excel_buf.seek(0)
-        st.download_button(
-            label="📥 导出 Excel",
-            data=excel_buf,
-            file_name=f"ContractLens_{Path(uploaded.name).stem}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
+        # 导出
+        col_x1, col_x2, _ = st.columns([1, 1, 4])
+        with col_x1:
+            pdf_data = generate_pdf(filename, fields, risks, summary)
+            if pdf_data is not None:
+                st.download_button("📥 PDF", pdf_data, f"ContractLens_{Path(filename).stem}.pdf", "application/pdf",
+                                   key=f"pdf_{prefix}", use_container_width=True)
+        with col_x2:
+            excel_buf = io.BytesIO()
+            with pd.ExcelWriter(excel_buf, engine="openpyxl") as w:
+                pd.DataFrame([{"字段": k, "结果": v} for k, v in fields.items()]).to_excel(w, sheet_name="字段", index=False)
+                if risks:
+                    pd.DataFrame([{"程度": r.get("severity"), "类别": r.get("category"), "原文": r.get("quote")} for r in risks]).to_excel(w, sheet_name="风险", index=False)
+            excel_buf.seek(0)
+            st.download_button("📥 Excel", excel_buf, f"ContractLens_{Path(filename).stem}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key=f"xls_{prefix}", use_container_width=True)
 
-    # ── 发送邮件 ──
-    st.markdown("---")
-    email_cfg = render_email_settings()
-    col_em1, col_em2, _ = st.columns([1, 1, 4])
-    with col_em1:
-        if st.button("📧 发送 Excel 到邮箱", use_container_width=True,
-                     type="primary"):
-            missing = validate_email_settings(email_cfg)
-            if missing:
-                st.error(f"请填写：{'、'.join(missing)}")
-            else:
-                with st.spinner("正在发送..."):
-                    excel_data = generate_review_excel(fields, risks, uploaded.name)
-                    subject = f"[ContractLens] 合同审查报告 - {uploaded.name}"
-                    body = f"""合同审查报告
-
-文件名: {uploaded.name}
-审查时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-甲方: {fields.get('甲方', '—')}
-乙方: {fields.get('乙方', '—')}
-合同金额: {fields.get('合同金额', '—')}
-风险数: {len(risks)} 条
-
-详细内容请查看附件。
----
-此邮件由 ContractLens 自动生成
-"""
-                    ok, msg = send_email_with_excel(
-                        email_cfg["server"], email_cfg["port"],
-                        email_cfg["sender"], email_cfg["password"],
-                        email_cfg["recipient"],
-                        subject, body, excel_data,
-                        f"ContractLens_{Path(uploaded.name).stem}.xlsx",
-                        email_cfg["use_ssl"],
-                    )
-                    if ok:
-                        st.success(f"✅ {msg}")
-                    else:
-                        st.error(f"❌ {msg}")
-
-    # 存储到 session 供 batch 使用
-    st.session_state["last_fields"] = fields
-    st.session_state["last_risks"] = risks
-    st.session_state["last_summary"] = summary
-
-    # ── 自动保存到审查历史 ──
-    saved_id = save_review(uploaded.name, fields, risks, summary, text[:300])
-    st.toast(f"✅ 已自动保存到审查历史", icon="💾")
+        st.markdown("---")
 
 
-# ═══════════════════════════════════════════════════════════
-#  第八部分：批量对比 UI
-# ═══════════════════════════════════════════════════════════
-
-def process_single_contract(file_bytes: bytes, filename: str) -> dict[str, Any] | None:
-    """处理单个合同，返回汇总信息。"""
-    text = extract_text(file_bytes, filename)
-    if text.startswith("[错误]") or text.startswith("[提示]"):
-        return None
-
-    fields = extract_all_fields(text)
-    risks = scan_risks(text)
-    summary = generate_summary(text)
-
-    # 自动保存到审查历史
-    try:
-        save_review(filename, fields, risks, summary, text[:300])
-    except Exception:
-        pass
-
-    high = sum(1 for r in risks if "高风险" in r["severity"])
-    mid = sum(1 for r in risks if "中风险" in r["severity"])
-    low = sum(1 for r in risks if "注意" in r["severity"])
-
-    # 计算风险等级
-    risk_score = high * 10 + mid * 5 + low * 1
-    if risk_score >= 20:
-        risk_level = "🔴 重点关注"
-    elif risk_score >= 8:
-        risk_level = "🟠 需要审阅"
-    else:
-        risk_level = "🟢 风险较低"
-
-    # 简化金额显示
-    amount = fields.get("合同金额", "未提取")
-    if amount != "未提取":
-        # 提取纯数字部分
-        num_match = re.search(r"¥([\d,]+)", amount)
-        if num_match:
-            amount = "¥" + num_match.group(1)
-
-    return {
-        "文件名": filename,
-        "甲方": fields.get("甲方", "未提取"),
-        "乙方": fields.get("乙方", "未提取"),
-        "合同金额": amount,
-        "合同期限": fields.get("合同期限", "未提取")[:30],
-        "签署日期": fields.get("签署日期", "未提取"),
-        "付款节奏": fields.get("付款节奏", "未提取")[:40],
-        "风险数": f"🔴{high} 🟠{mid} 🟡{low}",
-        "风险分值": risk_score,
-        "风险等级": risk_level,
-    }
-
-
-def render_batch_ui():
-    """批量上传 + 对比表格界面。"""
-    st.header("📊 批量合同对比")
-
+def render_unified_page():
+    """统一审查页面：上传 N 份 → 输出 N 份卡片 + 对比总览。"""
+    st.header("📤 上传合同文件")
     uploaded_files = st.file_uploader(
-        "一次上传多份合同（最多 10 份）",
+        "支持 PDF / DOCX / TXT，可一次选多份",
         type=["pdf", "docx", "doc", "txt"],
         accept_multiple_files=True,
-        key="batch_upload",
-        help="支持 PDF、DOCX、TXT 格式，最多 10 份",
+        key="unified_upload",
+        help="选中文件后自动开始审查",
+        label_visibility="collapsed",
     )
 
     if not uploaded_files:
-        st.info("👆 上传 2-10 份合同，自动生成横向对比表格")
-        st.markdown("""
-        #### 对比维度
-        - 📋 甲方 / 乙方 — 快速识别交易对手
-        - 💰 合同金额 — 金额排序，大额合同优先关注
-        - 📅 合同期限 — 是否有自动续约
-        - ⚠️ 风险点数 — 🔴🟠🟡 分级统计
-        - 🎯 风险等级 — 自动标记「重点关注」合同
-        """)
+        st.info("👆 上传合同文件，自动审查并生成决策卡片")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("#### 📎 支持格式\nPDF · Word · TXT")
+        with col2:
+            st.markdown("#### 🔍 18项字段提取\n金额/主体/期限/付款/违约/质保/验收/知识产权...")
+        with col3:
+            st.markdown("#### ⚠️ 10类风险扫描\n🔴 高风险 · 🟠 中风险 · 🟡 注意")
         return
 
     if len(uploaded_files) > 10:
-        st.warning("最多支持同时上传 10 份合同，已自动选取前 10 份")
+        st.warning("最多 10 份，已取前 10 份")
         uploaded_files = uploaded_files[:10]
 
-    if len(uploaded_files) < 2:
-        st.info("请至少上传 2 份合同进行对比")
-        return
-
-    # 开始处理
-    results: list[dict[str, Any]] = []
-    progress = st.progress(0, "正在逐份分析...")
+    # 处理所有文件
+    all_results: list[dict[str, Any]] = []
+    progress = st.progress(0, "正在审查...")
     status_text = st.empty()
 
     for i, uf in enumerate(uploaded_files):
-        status_text.text(f"正在分析 ({i + 1}/{len(uploaded_files)}): {uf.name}")
+        status_text.text(f"🔍 ({i+1}/{len(uploaded_files)}) {uf.name}")
         try:
             file_bytes = uf.read()
-            result = process_single_contract(file_bytes, uf.name)
+            text = extract_text(file_bytes, uf.name)
+            if text.startswith("[错误]") or text.startswith("[提示]"):
+                all_results.append({"filename": uf.name, "text": "", "fields": {}, "risks": [], "summary": text, "error": True})
+            else:
+                fields = extract_all_fields(text)
+                risks = scan_risks(text)
+                summary = generate_summary(text)
+                try:
+                    save_review(uf.name, fields, risks, summary, text[:300])
+                except Exception:
+                    pass
+                all_results.append({"filename": uf.name, "text": text, "fields": fields, "risks": risks, "summary": summary, "error": False})
         except Exception as e:
-            result = None
-        if result:
-            results.append(result)
-        else:
-            results.append({
-                "文件名": f"{uf.name} ⚠️ 解析失败",
-                "甲方": "—", "乙方": "—", "合同金额": "—",
-                "合同期限": "—", "签署日期": "—", "付款节奏": "—",
-                "风险数": "—", "风险分值": 0, "风险等级": "⚠️ 无法分析",
-            })
+            all_results.append({"filename": uf.name, "text": "", "fields": {}, "risks": [], "summary": str(e), "error": True})
         progress.progress((i + 1) / len(uploaded_files))
 
     status_text.empty()
     progress.empty()
 
-    if not results:
+    valid = [r for r in all_results if not r["error"]]
+    if not valid:
         st.error("所有文件解析失败")
         return
 
-    # ── 汇总对比表 ──
-    st.markdown("### 📊 横向对比表")
-    st.caption("按风险分值降序排列，最需关注的合同排在前面")
-
-    df = pd.DataFrame(results)
-    df = df.sort_values("风险分值", ascending=False).reset_index(drop=True)
-
-    # 用首列标记风险颜色（避免 styled df 兼容问题）
-    colors = []
-    for _, row in df.iterrows():
-        if "重点关注" in str(row["风险等级"]):
-            colors.append("🔴")
-        elif "需要审阅" in str(row["风险等级"]):
-            colors.append("🟠")
-        else:
-            colors.append("🟢")
-    df.insert(0, "", colors)
-
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "": st.column_config.TextColumn("", width="small"),
-            "文件名": st.column_config.TextColumn("文件名", width="medium"),
-            "甲方": st.column_config.TextColumn("甲方", width="medium"),
-            "乙方": st.column_config.TextColumn("乙方", width="medium"),
-            "合同金额": st.column_config.TextColumn("合同金额", width="small"),
-            "合同期限": st.column_config.TextColumn("合同期限", width="medium"),
-            "签署日期": st.column_config.TextColumn("签署日期", width="small"),
-            "付款节奏": st.column_config.TextColumn("付款节奏", width="medium"),
-            "风险数": st.column_config.TextColumn("风险数", width="small"),
-            "风险分值": st.column_config.NumberColumn("风险分值", width="small"),
-            "风险等级": st.column_config.TextColumn("风险等级", width="small"),
-        },
-    )
-
-    # ── 统计概览 ──
+    # ── 总览统计 ──
     st.markdown("---")
-    st.markdown("### 📈 批次统计")
+    st.markdown("### 📊 审查总览")
+    total_high = sum(1 for r in valid if sum(1 for x in r["risks"] if "高风险" in x.get("severity","")) > 0)
+    st.markdown(f"**{len(valid)} 份合同** · 🔴 含高风险 {total_high} 份")
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    # ── 对比表（多份时） ──
+    if len(valid) >= 2:
+        rows = []
+        for r in valid:
+            f = r["fields"]
+            high_c = sum(1 for x in r["risks"] if "高风险" in x.get("severity",""))
+            mid_c = sum(1 for x in r["risks"] if "中风险" in x.get("severity",""))
+            low_c = sum(1 for x in r["risks"] if "注意" in x.get("severity",""))
+            score = high_c * 10 + mid_c * 5 + low_c
+            level = "🔴" if score >= 20 else "🟠" if score >= 8 else "🟢"
+            rows.append({
+                "": level, "文件名": r["filename"],
+                "甲方": f.get("甲方","—")[:15], "乙方": f.get("乙方","—")[:15],
+                "金额": f.get("合同金额","—").replace("¥","")[:20],
+                "期限": f.get("合同期限","—")[:20],
+                "风险": f"🔴{high_c}🟠{mid_c}🟡{low_c}",
+                "_score": score
+            })
+        rows.sort(key=lambda x: x["_score"], reverse=True)
+        df = pd.DataFrame(rows).drop(columns=["_score"])
+        st.dataframe(df, use_container_width=True, hide_index=True,
+                      column_config={"": st.column_config.TextColumn("", width="small")})
 
-    with col_s1:
-        st.metric("📄 合同总数", len(results))
-    with col_s2:
-        total_focus = sum(1 for r in results if "重点关注" in str(r["风险等级"]))
-        st.metric("🔴 重点关注", f"{total_focus} 份")
-    with col_s3:
-        total_review = sum(1 for r in results if "需要审阅" in str(r["风险等级"]))
-        st.metric("🟠 需要审阅", f"{total_review} 份")
-    with col_s4:
-        total_low = sum(1 for r in results if "风险较低" in str(r["风险等级"]))
-        st.metric("🟢 风险较低", f"{total_low} 份")
+    # ── 逐个决策卡片 ──
+    for i, r in enumerate(valid):
+        render_full_card(r["filename"], r["fields"], r["risks"], r["summary"], r["text"], prefix=str(i))
 
-    # ── 金额排行 ──
-    st.markdown("### 💰 金额排行 Top 5")
-    # 尝试解析金额进行排序
-    amount_results = []
-    for r in results:
-        amt = r["合同金额"]
-        sort_key = 0
-        if amt not in ("—", "未提取"):
-            nums = re.findall(r"[\d,]+", str(amt))
-            if nums:
-                try:
-                    sort_key = float(nums[0].replace(",", ""))
-                except ValueError:
-                    pass
-        amount_results.append({"文件名": r["文件名"], "合同金额": amt, "_sort": sort_key})
+    # ── 错误文件 ──
+    errors = [r for r in all_results if r["error"]]
+    if errors:
+        st.warning(f"⚠️ {len(errors)} 个文件解析失败: {', '.join(e['filename'] for e in errors)}")
 
-    amount_results.sort(key=lambda x: x["_sort"], reverse=True)
-    top5 = amount_results[:5]
-
-    if top5 and top5[0]["_sort"] > 0:
-        amt_df = pd.DataFrame(top5)
-        amt_df = amt_df.drop(columns=["_sort"])
-        st.dataframe(amt_df, use_container_width=True, hide_index=True)
-
-    # ── 导出 ──
-    st.markdown("---")
-    col_x1, col_x2, _ = st.columns([1, 1, 4])
-
-    with col_x1:
-        # 导出 Excel 汇总
-        excel_buf = io.BytesIO()
-        with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name="合同对比汇总", index=False)
-        excel_buf.seek(0)
-        st.download_button(
-            label="📥 导出对比 Excel",
-            data=excel_buf,
-            file_name=f"ContractLens_对比汇总_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-    with col_x2:
-        # 导出 CSV
-        csv_data = df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            label="📥 导出 CSV",
-            data=csv_data,
-            file_name=f"ContractLens_对比汇总_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    # 存储到 session
-    st.session_state["batch_results"] = results
-    st.session_state["batch_df"] = df
-
-
-# ═══════════════════════════════════════════════════════════
-#  第九部分：审查历史 UI
-# ═══════════════════════════════════════════════════════════
-
-def render_history_ui():
-    """审查历史管理界面。"""
-    st.header("📋 审查历史")
-
-    records = load_all_reviews()
-
-    if not records:
-        st.info("📭 暂无审查记录。上传合同并完成审查后，记录会自动保存在这里。")
-        return
-
-    # 顶部统计
-    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-    with col_s1:
-        st.metric("📄 总审查数", len(records))
-    with col_s2:
-        total_high = sum(r.get("high_risk", 0) for r in records)
-        st.metric("🔴 高风险合计", total_high)
-    with col_s3:
-        latest = records[0]
-        st.metric("🕐 最近审查", latest.get("timestamp", "")[:10])
-    with col_s4:
-        st.metric("🗑️ 选中删除", f"{len(st.session_state.get('selected_ids', []))} 条")
-
-    st.markdown("---")
-
-    # 搜索
-    search = st.text_input("🔍 搜索文件名", placeholder="输入文件名关键词过滤...")
-
-    # 过滤
-    filtered = records
-    if search:
-        filtered = [r for r in records if search.lower() in r.get("filename", "").lower()]
-
-    if not filtered:
-        st.info(f"没有匹配「{search}」的记录")
-        return
-
-    # 全选
-    all_ids = [r["id"] for r in filtered]
-    selected_ids = st.session_state.get("selected_ids", [])
-
-    col_a, col_b = st.columns([1, 5])
-    with col_a:
-        if st.button("☑️ 全选/取消", use_container_width=True):
-            if len(selected_ids) == len(all_ids):
-                st.session_state["selected_ids"] = []
-            else:
-                st.session_state["selected_ids"] = all_ids[:]
-            st.rerun()
-
-    # 列表
-    for record in filtered:
-        rid = record["id"]
-        is_selected = rid in selected_ids
-
-        with st.container():
-            col_cb, col_info, col_action = st.columns([0.5, 7, 2.5])
-
-            with col_cb:
-                checked = st.checkbox("", value=is_selected, key=f"cb_{rid}",
-                                      on_change=lambda r=rid: _toggle_select(r))
-            with col_info:
-                risk_icons = ""
-                if record.get("high_risk", 0) > 0:
-                    risk_icons += f" 🔴{record['high_risk']}"
-                if record.get("mid_risk", 0) > 0:
-                    risk_icons += f" 🟠{record['mid_risk']}"
-                if record.get("low_risk", 0) > 0:
-                    risk_icons += f" 🟡{record['low_risk']}"
-
-                amount = record["fields"].get("合同金额", "—")
-                party_a = record["fields"].get("甲方", "—")[:20]
-
-                st.markdown(f"""
-                **{record['filename']}**  <small style="color:#94a3b8;">{record['timestamp']}</small>
-                <br><small>甲方: {party_a}  |  金额: {amount}  |  风险: {risk_icons if risk_icons else '无'}</small>
-                """, unsafe_allow_html=True)
-
-            with col_action:
-                col_v, col_d = st.columns(2)
-                with col_v:
-                    if st.button("📖 查看", key=f"view_{rid}", use_container_width=True):
-                        st.session_state["view_record_id"] = rid
-                        st.rerun()
-                with col_d:
-                    if st.button("🗑️", key=f"del_{rid}", use_container_width=True,
-                                 help="删除此记录"):
-                        delete_review(rid)
-                        if rid in st.session_state.get("selected_ids", []):
-                            st.session_state["selected_ids"].remove(rid)
-                        st.toast("已删除", icon="🗑️")
-                        st.rerun()
-
-    # 批量删除
-    if selected_ids:
-        st.markdown("---")
-        col_del, col_mail, _ = st.columns([1, 1, 4])
-        with col_del:
-            if st.button(f"🗑️ 批量删除选中的 {len(selected_ids)} 条", type="primary", use_container_width=True):
-                for rid in selected_ids:
-                    delete_review(rid)
-                st.session_state["selected_ids"] = []
-                st.toast(f"已删除 {len(selected_ids)} 条记录", icon="🗑️")
-                st.rerun()
-            st.caption("")
-
-    # ── 邮件发送 ──
-    with st.expander("📧 发送审查历史到邮箱（点击填写）", expanded=True):
+    # ── 邮件 ──
+    with st.expander("📧 发送审查结果到邮箱", expanded=False):
         email_cfg = render_email_settings()
-
-        # 选择发送范围
-        send_scope = st.radio(
-            "发送范围",
-            ["全部记录", f"仅选中 {len(selected_ids)} 条"] if selected_ids else ["全部记录"],
-            horizontal=True,
-            key="email_scope",
-        )
-
-        if st.button("📧 发送 Excel 汇总到邮箱", type="primary"):
+        if st.button("📧 发送全部审查 Excel 到邮箱", type="primary"):
             missing = validate_email_settings(email_cfg)
             if missing:
                 st.error(f"请填写：{'、'.join(missing)}")
             else:
-                with st.spinner("正在生成 Excel 并发送..."):
-                    target = records
-                    scope_desc = f"共 {len(records)} 条"
-                    if "选中" in send_scope and selected_ids:
-                        target = [r for r in records if r["id"] in selected_ids]
-                        scope_desc = f"选中 {len(target)} 条"
-
-                    excel_data = generate_history_excel(target)
-                    subject = f"[ContractLens] 合同审查历史汇总 ({scope_desc})"
-                    body = f"""合同审查历史汇总
-
-导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-范围: {scope_desc}
-
-含以下字段：甲方、乙方、合同金额、合同期限、签署日期、生效条件、
-付款节奏、违约金、争议解决地、保密期限、风险统计等。
-
-详细内容请查看附件 Excel。
----
-此邮件由 ContractLens 自动生成
-"""
+                with st.spinner("生成中..."):
+                    excel_buf = io.BytesIO()
+                    with pd.ExcelWriter(excel_buf, engine="openpyxl") as w:
+                        for r in valid:
+                            sheet = r["filename"][:31]
+                            pd.DataFrame([{"字段": k, "结果": v} for k, v in r["fields"].items()]).to_excel(w, sheet_name=sheet, index=False)
+                    excel_buf.seek(0)
                     ok, msg = send_email_with_excel(
                         email_cfg["server"], email_cfg["port"],
                         email_cfg["sender"], email_cfg["password"],
                         email_cfg["recipient"],
-                        subject, body, excel_data,
-                        f"ContractLens_History_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        f"[ContractLens] {len(valid)}份合同审查结果",
+                        f"共审查 {len(valid)} 份合同，详见附件。", excel_buf.getvalue(),
+                        f"ContractLens_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         email_cfg["use_ssl"],
                     )
-                    if ok:
-                        st.success(f"✅ {msg}")
-                    else:
-                        st.error(f"❌ {msg}")
+                    st.success(msg) if ok else st.error(msg)
 
-    # ── 查看详情弹窗 ──
-    view_id = st.session_state.get("view_record_id")
-    if view_id:
-        detail = load_review(view_id)
-        if detail:
+    # 存储供历史页面使用
+    st.session_state["last_valid"] = valid
+
+
+def render_history_page():
+    """审查历史（从统一页面侧边栏进入）。"""
+    st.header("📋 审查历史")
+    records = load_all_reviews()
+    if not records:
+        st.info("📭 暂无记录")
+        return
+
+    sel = st.session_state.get("selected_ids", [])
+    st.caption(f"共 {len(records)} 条 · 选中 {len(sel)} 条")
+
+    for r in records:
+        rid = r["id"]
+        with st.container():
+            c1, c2 = st.columns([8, 2])
+            with c1:
+                amt = r.get("fields",{}).get("合同金额","—")
+                st.markdown(f"**{r['filename']}**  <small>{r.get('timestamp','')}</small><br>"
+                           f"<small>{r.get('fields',{}).get('甲方','')[:20]} | {amt} | 🔴{r.get('high_risk',0)} 🟠{r.get('mid_risk',0)} 🟡{r.get('low_risk',0)}</small>",
+                           unsafe_allow_html=True)
+            with c2:
+                if st.button("📖", key=f"hv_{rid}"):
+                    st.session_state["view_hist"] = rid
+                    st.rerun()
+                if st.button("🗑️", key=f"hd_{rid}"):
+                    delete_review(rid)
+                    st.rerun()
+
+    if sel:
+        if st.button(f"🗑️ 删除选中 {len(sel)} 条", type="primary"):
+            for rid in sel:
+                delete_review(rid)
+            st.session_state["selected_ids"] = []
+            st.rerun()
+
+    # 详情
+    vid = st.session_state.get("view_hist")
+    if vid:
+        d = load_review(vid)
+        if d:
             st.markdown("---")
-            st.markdown(f"### 📄 {detail['filename']}")
-            st.caption(f"审查时间: {detail['timestamp']}")
-
-            # 核心指标
-            col_a1, col_b1, col_c1, col_d1 = st.columns(4)
-            with col_a1:
-                st.metric("甲方", detail["fields"].get("甲方", "—")[:20])
-            with col_b1:
-                st.metric("乙方", detail["fields"].get("乙方", "—")[:20])
-            with col_c1:
-                amt = detail["fields"].get("合同金额", "—")
-                st.metric("合同金额", amt[:25] if amt != "—" else "—")
-            with col_d1:
-                st.metric("合同期限", detail["fields"].get("合同期限", "—")[:20])
-
-            # 详细字段
-            with st.expander("📋 完整字段", expanded=False):
-                for k, v in detail["fields"].items():
-                    st.text(f"{k}: {v}")
-
-            # 风险
-            risks_detail = detail.get("risks", [])
-            if risks_detail:
-                with st.expander(f"⚠️ 风险条款（{len(risks_detail)} 条）", expanded=False):
-                    for r in risks_detail:
-                        st.markdown(f"""
-                        <div class="{r.get('css_class', 'risk-low')}">
-                            <strong>{r.get('severity', '')} · {r.get('category', '')}</strong>
-                            <div class="risk-quote">📌 {r.get('quote', '')}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-            # 摘要
-            with st.expander("📝 合同摘要", expanded=False):
-                st.markdown(f'<div class="summary-box">{detail.get("summary", "")}</div>',
-                            unsafe_allow_html=True)
-
-            if st.button("✕ 关闭详情"):
-                st.session_state.pop("view_record_id", None)
+            st.subheader(d["filename"])
+            for k, v in d.get("fields", {}).items():
+                st.text(f"{k}: {v}")
+            if st.button("✕ 关闭"):
+                st.session_state.pop("view_hist", None)
                 st.rerun()
 
-
-def _toggle_select(rid: str):
-    """切换选中状态。"""
-    selected = st.session_state.get("selected_ids", [])
-    if rid in selected:
-        selected.remove(rid)
-    else:
-        selected.append(rid)
-    st.session_state["selected_ids"] = selected
+    # 导出导入
+    st.markdown("---")
+    col_e, col_i = st.columns(2)
+    with col_e:
+        st.download_button("📥 导出历史 JSON", export_all_reviews(),
+                          f"ContractLens_History_{datetime.now().strftime('%Y%m%d')}.json",
+                          "application/json", use_container_width=True)
+    with col_i:
+        imp = st.file_uploader("📤 导入", type=["json"], key="hist_import", label_visibility="collapsed")
+        if imp:
+            n = import_reviews(imp.read())
+            st.success(f"导入 {n} 条") if n else st.warning("无新记录")
+            st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════
-#  第十部分：主入口
+#  第九部分：主入口
 # ═══════════════════════════════════════════════════════════
 
 def main():
-    """ContractLens 主应用。"""
+    """ContractLens 统一审查页面。"""
     _inject_css()
 
-    # 初始化 session state
-    if "selected_ids" not in st.session_state:
-        st.session_state["selected_ids"] = []
-    if "view_record_id" not in st.session_state:
-        st.session_state["view_record_id"] = None
+    # 初始化
+    for k in ["selected_ids", "view_hist", "show_history"]:
+        if k not in st.session_state:
+            st.session_state[k] = [] if k == "selected_ids" else None
 
     # 侧边栏
     with st.sidebar:
         st.markdown("## 📄 ContractLens")
-        st.markdown("*合同速读助手 v1.0*")
+        st.markdown("*合同速读助手 v2.0*")
         st.markdown("---")
-
-        mode = st.radio(
-            "选择模式",
-            ["📄 单份审查", "📊 批量对比", "📋 审查历史"],
-            label_visibility="collapsed",
-        )
-
-        # 只在历史页面显示导出按钮
-        if "📋 审查历史" in mode:
-            st.markdown("---")
-            # 导出全部历史
-            all_records = load_all_reviews()
-            if all_records:
-                json_bytes = export_all_reviews()
-                st.download_button(
-                    label="📥 导出全部历史 (JSON)",
-                    data=json_bytes,
-                    file_name=f"ContractLens_History_{datetime.now().strftime('%Y%m%d')}.json",
-                    mime="application/json",
-                    use_container_width=True,
-                )
-                # 导入历史
-                imported_file = st.file_uploader(
-                    "📤 导入历史记录",
-                    type=["json"],
-                    key="import_history",
-                    label_visibility="collapsed",
-                )
-                if imported_file:
-                    count = import_reviews(imported_file.read())
-                    if count > 0:
-                        st.success(f"✅ 成功导入 {count} 条记录")
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ 没有新记录可导入（可能已存在）")
-            st.markdown(f"📊 共 {len(all_records)} 条审查记录")
-
+        if st.button("📋 审查历史", use_container_width=True):
+            st.session_state["show_history"] = True
+        if st.button("📄 返回审查", use_container_width=True):
+            st.session_state["show_history"] = False
         st.markdown("---")
-        st.markdown("### 🔒 完全离线")
-        st.markdown("- 无需联网\n- 无需API密钥\n- 数据不出本地")
-        st.markdown("### ⚙️ 技术栈")
-        st.markdown("Streamlit + pdfplumber\n+ python-docx + regex\n+ pandas + reportlab")
+        st.markdown("### 📋 提取字段（18项）")
+        st.markdown("合同编号 · 甲方 · 乙方 · 金额 · 日期 · 签订地 · 生效条件 · 期限 · 自动续约 · 付款 · 交付物 · 验收 · 违约金 · 质保 · 争议解决 · 保密 · 知识产权 · 发票")
+        st.markdown("### ⚠️ 风险扫描（10类）")
+        st.markdown("单方免责 · 加重责任 · 知识产权 · 模糊条款 · 管辖不利 · 违约金过高 · 付款苛刻 · 自动续约 · 保密过长 · 不可抗力")
 
     # 主界面
-    if "📊 批量对比" in mode:
-        render_batch_ui()
-    elif "📋 审查历史" in mode:
-        render_history_ui()
+    if st.session_state.get("show_history"):
+        render_history_page()
     else:
-        render_single_file_ui()
+        render_unified_page()
 
 
 if __name__ == "__main__":
