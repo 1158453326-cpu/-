@@ -1104,16 +1104,19 @@ def generate_pdf(
     fields: dict[str, Any],
     risks: list[dict[str, Any]],
     summary: str,
-) -> bytes:
-    """使用 reportlab 生成 PDF 报告。自动适配各平台中文字体。"""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.colors import HexColor
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
-    )
-    from reportlab.pdfbase import pdfmetrics
+) -> bytes | None:
+    """使用 reportlab 生成 PDF 报告。reportlab 未安装时返回 None。"""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.colors import HexColor
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+        )
+        from reportlab.pdfbase import pdfmetrics
+    except ImportError:
+        return None  # reportlab 未安装，跳过 PDF 生成
 
     # ── 跨平台中文字体检测 ──
     cn_font = "Helvetica"  # 兜底
@@ -1428,13 +1431,14 @@ def render_single_file_ui():
     col_exp1, col_exp2, col_exp3, col_exp4 = st.columns([1, 1, 1, 3])
     with col_exp1:
         pdf_data = generate_pdf(uploaded.name, fields, risks, summary)
-        st.download_button(
-            label="📥 导出 PDF",
-            data=pdf_data,
-            file_name=f"ContractLens_{Path(uploaded.name).stem}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        if pdf_data is not None:
+            st.download_button(
+                label="📥 导出 PDF",
+                data=pdf_data,
+                file_name=f"ContractLens_{Path(uploaded.name).stem}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
     with col_exp2:
         # Excel 导出
         df_export = pd.DataFrame([
