@@ -99,6 +99,117 @@ def _inject_css():
 
 
 # ═══════════════════════════════════════════════════════════
+#  第〇部分：审查历史管理
+# ═══════════════════════════════════════════════════════════
+
+import json
+import shutil
+
+HISTORY_DIR = Path(__file__).parent / "history"
+
+
+def _ensure_history_dir() -> Path:
+    """确保历史记录目录存在。"""
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    return HISTORY_DIR
+
+
+def save_review(
+    filename: str,
+    fields: dict[str, Any],
+    risks: list[dict[str, Any]],
+    summary: str,
+    text_preview: str = "",
+) -> str:
+    """保存审查结果，返回记录 ID。"""
+    _ensure_history_dir()
+    record_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    record = {
+        "id": record_id,
+        "filename": filename,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "fields": fields,
+        "risks": risks,
+        "summary": summary,
+        "text_preview": text_preview[:300],
+        "risk_count": len(risks),
+        "high_risk": sum(1 for r in risks if "高风险" in r.get("severity", "")),
+        "mid_risk": sum(1 for r in risks if "中风险" in r.get("severity", "")),
+        "low_risk": sum(1 for r in risks if "注意" in r.get("severity", "")),
+    }
+    filepath = _ensure_history_dir() / f"{record_id}.json"
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+    return record_id
+
+
+def load_all_reviews() -> list[dict[str, Any]]:
+    """加载所有历史审查记录，按时间倒序。"""
+    _ensure_history_dir()
+    records: list[dict[str, Any]] = []
+    for fp in sorted(HISTORY_DIR.glob("*.json"), reverse=True):
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                records.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return records
+
+
+def load_review(record_id: str) -> dict[str, Any] | None:
+    """加载单条审查记录。"""
+    fp = _ensure_history_dir() / f"{record_id}.json"
+    if fp.exists():
+        with open(fp, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def delete_review(record_id: str) -> bool:
+    """删除一条审查记录。"""
+    fp = HISTORY_DIR / f"{record_id}.json"
+    if fp.exists():
+        fp.unlink()
+        return True
+    return False
+
+
+def export_all_reviews() -> bytes:
+    """导出全部历史记录为 JSON 文件。"""
+    records = load_all_reviews()
+    return json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def import_reviews(json_bytes: bytes) -> int:
+    """从 JSON 导入历史记录，返回导入条数。"""
+    _ensure_history_dir()
+    try:
+        data = json.loads(json_bytes.decode("utf-8"))
+        if isinstance(data, list):
+            count = 0
+            for record in data:
+                rid = record.get("id")
+                if rid:
+                    fp = HISTORY_DIR / f"{rid}.json"
+                    if not fp.exists():
+                        with open(fp, "w", encoding="utf-8") as f:
+                            json.dump(record, f, ensure_ascii=False, indent=2)
+                        count += 1
+            return count
+        elif isinstance(data, dict):
+            rid = data.get("id")
+            if rid:
+                fp = HISTORY_DIR / f"{rid}.json"
+                if not fp.exists():
+                    with open(fp, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    return 1
+        return 0
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return 0
+
+
+# ═══════════════════════════════════════════════════════════
 #  第一部分：文本提取
 # ═══════════════════════════════════════════════════════════
 
@@ -1158,6 +1269,10 @@ def render_single_file_ui():
     st.session_state["last_risks"] = risks
     st.session_state["last_summary"] = summary
 
+    # ── 自动保存到审查历史 ──
+    saved_id = save_review(uploaded.name, fields, risks, summary, text[:300])
+    st.toast(f"✅ 已自动保存到审查历史", icon="💾")
+
 
 # ═══════════════════════════════════════════════════════════
 #  第八部分：批量对比 UI
@@ -1378,12 +1493,183 @@ def render_batch_ui():
 
 
 # ═══════════════════════════════════════════════════════════
-#  第九部分：主入口
+#  第九部分：审查历史 UI
+# ═══════════════════════════════════════════════════════════
+
+def render_history_ui():
+    """审查历史管理界面。"""
+    st.header("📋 审查历史")
+
+    records = load_all_reviews()
+
+    if not records:
+        st.info("📭 暂无审查记录。上传合同并完成审查后，记录会自动保存在这里。")
+        return
+
+    # 顶部统计
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    with col_s1:
+        st.metric("📄 总审查数", len(records))
+    with col_s2:
+        total_high = sum(r.get("high_risk", 0) for r in records)
+        st.metric("🔴 高风险合计", total_high)
+    with col_s3:
+        latest = records[0]
+        st.metric("🕐 最近审查", latest.get("timestamp", "")[:10])
+    with col_s4:
+        st.metric("🗑️ 选中删除", f"{len(st.session_state.get('selected_ids', []))} 条")
+
+    st.markdown("---")
+
+    # 搜索
+    search = st.text_input("🔍 搜索文件名", placeholder="输入文件名关键词过滤...")
+
+    # 过滤
+    filtered = records
+    if search:
+        filtered = [r for r in records if search.lower() in r.get("filename", "").lower()]
+
+    if not filtered:
+        st.info(f"没有匹配「{search}」的记录")
+        return
+
+    # 全选
+    all_ids = [r["id"] for r in filtered]
+    selected_ids = st.session_state.get("selected_ids", [])
+
+    col_a, col_b = st.columns([1, 5])
+    with col_a:
+        if st.button("☑️ 全选/取消", use_container_width=True):
+            if len(selected_ids) == len(all_ids):
+                st.session_state["selected_ids"] = []
+            else:
+                st.session_state["selected_ids"] = all_ids[:]
+            st.rerun()
+
+    # 列表
+    for record in filtered:
+        rid = record["id"]
+        is_selected = rid in selected_ids
+
+        with st.container():
+            col_cb, col_info, col_action = st.columns([0.5, 7, 2.5])
+
+            with col_cb:
+                checked = st.checkbox("", value=is_selected, key=f"cb_{rid}",
+                                      on_change=lambda r=rid: _toggle_select(r))
+            with col_info:
+                risk_icons = ""
+                if record.get("high_risk", 0) > 0:
+                    risk_icons += f" 🔴{record['high_risk']}"
+                if record.get("mid_risk", 0) > 0:
+                    risk_icons += f" 🟠{record['mid_risk']}"
+                if record.get("low_risk", 0) > 0:
+                    risk_icons += f" 🟡{record['low_risk']}"
+
+                amount = record["fields"].get("合同金额", "—")
+                party_a = record["fields"].get("甲方", "—")[:20]
+
+                st.markdown(f"""
+                **{record['filename']}**  <small style="color:#94a3b8;">{record['timestamp']}</small>
+                <br><small>甲方: {party_a}  |  金额: {amount}  |  风险: {risk_icons if risk_icons else '无'}</small>
+                """, unsafe_allow_html=True)
+
+            with col_action:
+                col_v, col_d = st.columns(2)
+                with col_v:
+                    if st.button("📖 查看", key=f"view_{rid}", use_container_width=True):
+                        st.session_state["view_record_id"] = rid
+                        st.rerun()
+                with col_d:
+                    if st.button("🗑️", key=f"del_{rid}", use_container_width=True,
+                                 help="删除此记录"):
+                        delete_review(rid)
+                        if rid in st.session_state.get("selected_ids", []):
+                            st.session_state["selected_ids"].remove(rid)
+                        st.toast("已删除", icon="🗑️")
+                        st.rerun()
+
+    # 批量删除
+    if selected_ids:
+        st.markdown("---")
+        if st.button(f"🗑️ 批量删除选中的 {len(selected_ids)} 条记录", type="primary"):
+            for rid in selected_ids:
+                delete_review(rid)
+            st.session_state["selected_ids"] = []
+            st.toast(f"已删除 {len(selected_ids)} 条记录", icon="🗑️")
+            st.rerun()
+
+    # ── 查看详情弹窗 ──
+    view_id = st.session_state.get("view_record_id")
+    if view_id:
+        detail = load_review(view_id)
+        if detail:
+            st.markdown("---")
+            st.markdown(f"### 📄 {detail['filename']}")
+            st.caption(f"审查时间: {detail['timestamp']}")
+
+            # 核心指标
+            col_a1, col_b1, col_c1, col_d1 = st.columns(4)
+            with col_a1:
+                st.metric("甲方", detail["fields"].get("甲方", "—")[:20])
+            with col_b1:
+                st.metric("乙方", detail["fields"].get("乙方", "—")[:20])
+            with col_c1:
+                amt = detail["fields"].get("合同金额", "—")
+                st.metric("合同金额", amt[:25] if amt != "—" else "—")
+            with col_d1:
+                st.metric("合同期限", detail["fields"].get("合同期限", "—")[:20])
+
+            # 详细字段
+            with st.expander("📋 完整字段", expanded=False):
+                for k, v in detail["fields"].items():
+                    st.text(f"{k}: {v}")
+
+            # 风险
+            risks_detail = detail.get("risks", [])
+            if risks_detail:
+                with st.expander(f"⚠️ 风险条款（{len(risks_detail)} 条）", expanded=False):
+                    for r in risks_detail:
+                        st.markdown(f"""
+                        <div class="{r.get('css_class', 'risk-low')}">
+                            <strong>{r.get('severity', '')} · {r.get('category', '')}</strong>
+                            <div class="risk-quote">📌 {r.get('quote', '')}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            # 摘要
+            with st.expander("📝 合同摘要", expanded=False):
+                st.markdown(f'<div class="summary-box">{detail.get("summary", "")}</div>',
+                            unsafe_allow_html=True)
+
+            if st.button("✕ 关闭详情"):
+                st.session_state.pop("view_record_id", None)
+                st.rerun()
+
+
+def _toggle_select(rid: str):
+    """切换选中状态。"""
+    selected = st.session_state.get("selected_ids", [])
+    if rid in selected:
+        selected.remove(rid)
+    else:
+        selected.append(rid)
+    st.session_state["selected_ids"] = selected
+
+
+# ═══════════════════════════════════════════════════════════
+#  第十部分：主入口
 # ═══════════════════════════════════════════════════════════
 
 def main():
     """ContractLens 主应用。"""
     _inject_css()
+
+    # 初始化 session state
+    if "selected_ids" not in st.session_state:
+        st.session_state["selected_ids"] = []
+    if "view_record_id" not in st.session_state:
+        st.session_state["view_record_id"] = None
 
     # 侧边栏
     with st.sidebar:
@@ -1393,21 +1679,51 @@ def main():
 
         mode = st.radio(
             "选择模式",
-            ["📄 单份审查", "📊 批量对比"],
+            ["📄 单份审查", "📊 批量对比", "📋 审查历史"],
             label_visibility="collapsed",
         )
+
+        # 只在历史页面显示导出按钮
+        if "📋 审查历史" in mode:
+            st.markdown("---")
+            # 导出全部历史
+            all_records = load_all_reviews()
+            if all_records:
+                json_bytes = export_all_reviews()
+                st.download_button(
+                    label="📥 导出全部历史 (JSON)",
+                    data=json_bytes,
+                    file_name=f"ContractLens_History_{datetime.now().strftime('%Y%m%d')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+                # 导入历史
+                imported_file = st.file_uploader(
+                    "📤 导入历史记录",
+                    type=["json"],
+                    key="import_history",
+                    label_visibility="collapsed",
+                )
+                if imported_file:
+                    count = import_reviews(imported_file.read())
+                    if count > 0:
+                        st.success(f"✅ 成功导入 {count} 条记录")
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ 没有新记录可导入（可能已存在）")
+            st.markdown(f"📊 共 {len(all_records)} 条审查记录")
 
         st.markdown("---")
         st.markdown("### 🔒 完全离线")
         st.markdown("- 无需联网\n- 无需API密钥\n- 数据不出本地")
-        st.markdown("### 📋 提取字段")
-        st.markdown("- 甲方/乙方\n- 合同金额\n- 签署日期\n- 生效条件\n- 合同期限\n- 付款节奏\n- 交付物/服务范围\n- 违约金\n- 争议解决地\n- 保密期限")
         st.markdown("### ⚙️ 技术栈")
         st.markdown("Streamlit + pdfplumber\n+ python-docx + regex\n+ pandas + reportlab")
 
     # 主界面
     if "📊 批量对比" in mode:
         render_batch_ui()
+    elif "📋 审查历史" in mode:
+        render_history_ui()
     else:
         render_single_file_ui()
 

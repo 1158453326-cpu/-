@@ -24,6 +24,9 @@ Thumbs.db
 # WorkBuddy internal
 .workbuddy/
 
+# Review history (local data)
+history/
+
 # Temp
 *.tmp
 *.log
