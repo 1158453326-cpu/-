@@ -210,6 +210,188 @@ def import_reviews(json_bytes: bytes) -> int:
 
 
 # ═══════════════════════════════════════════════════════════
+#  第〇·五部分：邮件发送
+# ═══════════════════════════════════════════════════════════
+
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
+
+# 常见邮箱 SMTP 配置
+SMTP_PRESETS: dict[str, dict[str, Any]] = {
+    "QQ邮箱": {"server": "smtp.qq.com", "port": 465, "use_ssl": True},
+    "163邮箱": {"server": "smtp.163.com", "port": 465, "use_ssl": True},
+    "126邮箱": {"server": "smtp.126.com", "port": 465, "use_ssl": True},
+    "Gmail": {"server": "smtp.gmail.com", "port": 587, "use_ssl": False},
+    "Outlook": {"server": "smtp.office365.com", "port": 587, "use_ssl": False},
+    "自定义": {"server": "", "port": 465, "use_ssl": True},
+}
+
+
+def send_email_with_excel(
+    smtp_server: str,
+    smtp_port: int,
+    sender_email: str,
+    sender_password: str,
+    recipient_email: str,
+    subject: str,
+    body: str,
+    excel_data: bytes,
+    filename: str,
+    use_ssl: bool = True,
+) -> tuple[bool, str]:
+    """通过 SMTP 发送带 Excel 附件的邮件。返回 (成功, 消息)。"""
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = recipient_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        # 附件
+        part = MIMEBase("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        part.set_payload(excel_data)
+        encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            f'attachment; filename="{filename}"',
+        )
+        msg.attach(part)
+
+        # 发送
+        if use_ssl:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
+            server.starttls()
+
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, [recipient_email], msg.as_string())
+        server.quit()
+        return True, "邮件发送成功"
+    except smtplib.SMTPAuthenticationError:
+        return False, "认证失败：请检查邮箱地址和授权码是否正确"
+    except smtplib.SMTPConnectError:
+        return False, "连接失败：无法连接到 SMTP 服务器，请检查服务器地址和端口"
+    except smtplib.SMTPException as e:
+        return False, f"SMTP 错误：{e}"
+    except Exception as e:
+        return False, f"发送失败：{e}"
+
+
+def generate_review_excel(fields: dict[str, Any], risks: list[dict[str, Any]], filename: str = "") -> bytes:
+    """生成单份审查 Excel 报告。"""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_fields = pd.DataFrame([{"字段": k, "提取结果": v} for k, v in fields.items()])
+        df_fields.to_excel(writer, sheet_name="合同字段", index=False)
+        if risks:
+            df_risks = pd.DataFrame([{
+                "严重程度": r.get("severity", ""),
+                "类别": r.get("category", ""),
+                "说明": r.get("description", ""),
+                "原文摘录": r.get("quote", ""),
+            } for r in risks])
+            df_risks.to_excel(writer, sheet_name="风险条款", index=False)
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_history_excel(records: list[dict[str, Any]]) -> bytes:
+    """生成审查历史汇总 Excel。"""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        # 汇总表
+        summary_rows = []
+        for r in records:
+            fields = r.get("fields", {})
+            summary_rows.append({
+                "文件名": r.get("filename", ""),
+                "审查时间": r.get("timestamp", ""),
+                "甲方": fields.get("甲方", "")[:30],
+                "乙方": fields.get("乙方", "")[:30],
+                "合同金额": fields.get("合同金额", ""),
+                "合同期限": fields.get("合同期限", "")[:30],
+                "签署日期": fields.get("签署日期", ""),
+                "生效条件": fields.get("生效条件", ""),
+                "付款节奏": fields.get("付款节奏", "")[:50],
+                "违约金": fields.get("违约金", "")[:50],
+                "争议解决地": fields.get("争议解决地", ""),
+                "保密期限": fields.get("保密期限", ""),
+                "风险总数": r.get("risk_count", 0),
+                "高风险": r.get("high_risk", 0),
+                "中风险": r.get("mid_risk", 0),
+                "低风险": r.get("low_risk", 0),
+            })
+        df_summary = pd.DataFrame(summary_rows)
+        df_summary.to_excel(writer, sheet_name="审查汇总", index=False)
+
+        # 每条详细记录单独一个 sheet（只做前20条避免文件过大）
+        for i, r in enumerate(records[:20]):
+            sheet_name = f"详情_{i+1}"[:31]  # Excel sheet name limit
+            fields = r.get("fields", {})
+            df_detail = pd.DataFrame([{"字段": k, "提取结果": v} for k, v in fields.items()])
+            df_detail.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    buf.seek(0)
+    return buf.read()
+
+
+# ═══════════════════════════════════════════════════════════
+#  第〇·六部分：邮件设置 UI 组件
+# ═══════════════════════════════════════════════════════════
+
+def render_email_settings() -> dict[str, Any]:
+    """渲染邮件设置表单，返回配置字典。"""
+    with st.expander("📧 邮件发送设置", expanded=False):
+        preset = st.selectbox("邮箱类型", list(SMTP_PRESETS.keys()), index=0)
+
+        cfg = SMTP_PRESETS[preset]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if preset == "自定义":
+                server = st.text_input("SMTP 服务器", value=cfg["server"],
+                                       placeholder="smtp.qq.com")
+            else:
+                server = cfg["server"]
+                st.text_input("SMTP 服务器", value=server, disabled=True)
+        with col2:
+            port = st.number_input("端口", value=cfg["port"], min_value=1, max_value=65535)
+        use_ssl = cfg["use_ssl"]
+
+        sender = st.text_input("发件邮箱", placeholder="your_email@qq.com")
+        password = st.text_input("授权码（非邮箱密码）", type="password",
+                                 placeholder="QQ邮箱→设置→账户→POP3/SMTP服务→生成授权码")
+        recipient = st.text_input("收件邮箱", placeholder="recipient@example.com")
+
+        return {
+            "server": server,
+            "port": port,
+            "use_ssl": use_ssl,
+            "sender": sender,
+            "password": password,
+            "recipient": recipient,
+        }
+
+
+def validate_email_settings(cfg: dict[str, Any]) -> list[str]:
+    """验证邮件配置，返回缺失项列表。"""
+    missing = []
+    if not cfg.get("server"):
+        missing.append("SMTP 服务器")
+    if not cfg.get("sender"):
+        missing.append("发件邮箱")
+    if not cfg.get("password"):
+        missing.append("授权码")
+    if not cfg.get("recipient"):
+        missing.append("收件邮箱")
+    return missing
+
+
+# ═══════════════════════════════════════════════════════════
 #  第一部分：文本提取
 # ═══════════════════════════════════════════════════════════
 
@@ -1264,6 +1446,46 @@ def render_single_file_ui():
             use_container_width=True,
         )
 
+    # ── 发送邮件 ──
+    st.markdown("---")
+    email_cfg = render_email_settings()
+    col_em1, col_em2, _ = st.columns([1, 1, 4])
+    with col_em1:
+        if st.button("📧 发送 Excel 到邮箱", use_container_width=True,
+                     type="primary"):
+            missing = validate_email_settings(email_cfg)
+            if missing:
+                st.error(f"请填写：{'、'.join(missing)}")
+            else:
+                with st.spinner("正在发送..."):
+                    excel_data = generate_review_excel(fields, risks, uploaded.name)
+                    subject = f"[ContractLens] 合同审查报告 - {uploaded.name}"
+                    body = f"""合同审查报告
+
+文件名: {uploaded.name}
+审查时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+甲方: {fields.get('甲方', '—')}
+乙方: {fields.get('乙方', '—')}
+合同金额: {fields.get('合同金额', '—')}
+风险数: {len(risks)} 条
+
+详细内容请查看附件。
+---
+此邮件由 ContractLens 自动生成
+"""
+                    ok, msg = send_email_with_excel(
+                        email_cfg["server"], email_cfg["port"],
+                        email_cfg["sender"], email_cfg["password"],
+                        email_cfg["recipient"],
+                        subject, body, excel_data,
+                        f"ContractLens_{Path(uploaded.name).stem}.xlsx",
+                        email_cfg["use_ssl"],
+                    )
+                    if ok:
+                        st.success(f"✅ {msg}")
+                    else:
+                        st.error(f"❌ {msg}")
+
     # 存储到 session 供 batch 使用
     st.session_state["last_fields"] = fields
     st.session_state["last_risks"] = risks
@@ -1592,12 +1814,66 @@ def render_history_ui():
     # 批量删除
     if selected_ids:
         st.markdown("---")
-        if st.button(f"🗑️ 批量删除选中的 {len(selected_ids)} 条记录", type="primary"):
-            for rid in selected_ids:
-                delete_review(rid)
-            st.session_state["selected_ids"] = []
-            st.toast(f"已删除 {len(selected_ids)} 条记录", icon="🗑️")
-            st.rerun()
+        col_del, col_mail, _ = st.columns([1, 1, 4])
+        with col_del:
+            if st.button(f"🗑️ 批量删除选中的 {len(selected_ids)} 条", type="primary", use_container_width=True):
+                for rid in selected_ids:
+                    delete_review(rid)
+                st.session_state["selected_ids"] = []
+                st.toast(f"已删除 {len(selected_ids)} 条记录", icon="🗑️")
+                st.rerun()
+            st.caption("")
+
+    # ── 邮件发送 ──
+    with st.expander("📧 发送审查历史到邮箱", expanded=False):
+        email_cfg = render_email_settings()
+
+        # 选择发送范围
+        send_scope = st.radio(
+            "发送范围",
+            ["全部记录", f"仅选中 {len(selected_ids)} 条"] if selected_ids else ["全部记录"],
+            horizontal=True,
+            key="email_scope",
+        )
+
+        if st.button("📧 发送 Excel 汇总到邮箱", type="primary"):
+            missing = validate_email_settings(email_cfg)
+            if missing:
+                st.error(f"请填写：{'、'.join(missing)}")
+            else:
+                with st.spinner("正在生成 Excel 并发送..."):
+                    target = records
+                    scope_desc = f"共 {len(records)} 条"
+                    if "选中" in send_scope and selected_ids:
+                        target = [r for r in records if r["id"] in selected_ids]
+                        scope_desc = f"选中 {len(target)} 条"
+
+                    excel_data = generate_history_excel(target)
+                    subject = f"[ContractLens] 合同审查历史汇总 ({scope_desc})"
+                    body = f"""合同审查历史汇总
+
+导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+范围: {scope_desc}
+
+含以下字段：甲方、乙方、合同金额、合同期限、签署日期、生效条件、
+付款节奏、违约金、争议解决地、保密期限、风险统计等。
+
+详细内容请查看附件 Excel。
+---
+此邮件由 ContractLens 自动生成
+"""
+                    ok, msg = send_email_with_excel(
+                        email_cfg["server"], email_cfg["port"],
+                        email_cfg["sender"], email_cfg["password"],
+                        email_cfg["recipient"],
+                        subject, body, excel_data,
+                        f"ContractLens_History_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        email_cfg["use_ssl"],
+                    )
+                    if ok:
+                        st.success(f"✅ {msg}")
+                    else:
+                        st.error(f"❌ {msg}")
 
     # ── 查看详情弹窗 ──
     view_id = st.session_state.get("view_record_id")
