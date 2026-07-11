@@ -16,8 +16,6 @@ Author: ContractLens
 Version: 1.0.0
 """
 
-from __future__ import annotations
-
 import io
 import os
 import re
@@ -1508,6 +1506,13 @@ def process_single_contract(file_bytes: bytes, filename: str) -> dict[str, Any] 
 
     fields = extract_all_fields(text)
     risks = scan_risks(text)
+    summary = generate_summary(text)
+
+    # 自动保存到审查历史
+    try:
+        save_review(filename, fields, risks, summary, text[:300])
+    except Exception:
+        pass
 
     high = sum(1 for r in risks if "高风险" in r["severity"])
     mid = sum(1 for r in risks if "中风险" in r["severity"])
@@ -1583,8 +1588,11 @@ def render_batch_ui():
 
     for i, uf in enumerate(uploaded_files):
         status_text.text(f"正在分析 ({i + 1}/{len(uploaded_files)}): {uf.name}")
-        file_bytes = uf.read()
-        result = process_single_contract(file_bytes, uf.name)
+        try:
+            file_bytes = uf.read()
+            result = process_single_contract(file_bytes, uf.name)
+        except Exception as e:
+            result = None
         if result:
             results.append(result)
         else:
@@ -1610,21 +1618,23 @@ def render_batch_ui():
     df = pd.DataFrame(results)
     df = df.sort_values("风险分值", ascending=False).reset_index(drop=True)
 
-    # 样式化
-    def highlight_risk(row: pd.Series) -> list[str]:
+    # 用首列标记风险颜色（避免 styled df 兼容问题）
+    colors = []
+    for _, row in df.iterrows():
         if "重点关注" in str(row["风险等级"]):
-            return ["background-color: #fef2f2"] * len(row)
+            colors.append("🔴")
         elif "需要审阅" in str(row["风险等级"]):
-            return ["background-color: #fffbeb"] * len(row)
-        return [""] * len(row)
-
-    styled_df = df.style.apply(highlight_risk, axis=1)
+            colors.append("🟠")
+        else:
+            colors.append("🟢")
+    df.insert(0, "", colors)
 
     st.dataframe(
-        styled_df,
+        df,
         use_container_width=True,
         hide_index=True,
         column_config={
+            "": st.column_config.TextColumn("", width="small"),
             "文件名": st.column_config.TextColumn("文件名", width="medium"),
             "甲方": st.column_config.TextColumn("甲方", width="medium"),
             "乙方": st.column_config.TextColumn("乙方", width="medium"),
