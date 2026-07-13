@@ -931,6 +931,216 @@ def extract_all_fields(text: str) -> dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════
+#  第三·五部分：AI 增强提取（DeepSeek / OpenAI 兼容 API）
+# ═══════════════════════════════════════════════════════════
+
+import json as _json
+
+AI_EXTRACTION_PROMPT = """你是一个专业的合同审查助手。请从以下合同文本中提取关键字段，以JSON格式返回。
+
+提取字段（找不到填"未提取"）：
+- 合同编号
+- 甲方（全称）
+- 乙方（全称）
+- 合同金额（统一为数字，如"1000000"）
+- 签署日期
+- 签订地点
+- 生效条件
+- 合同期限（起止时间）
+- 自动续约（是/否，如有条款请摘录）
+- 交付物或服务范围（一句话概括）
+- 付款节奏（分几期、比例、前提）
+- 验收标准
+- 违约金（具体数字或计算方式）
+- 质保或维保期
+- 争议解决地（城市+机构）
+- 保密期限
+- 知识产权归属
+- 发票类型或税率
+
+只返回一个JSON对象，不要任何额外文字。JSON格式：
+{
+  "合同编号": "...",
+  "甲方": "...",
+  "乙方": "...",
+  "合同金额": "...",
+  "签署日期": "...",
+  "签订地点": "...",
+  "生效条件": "...",
+  "合同期限": "...",
+  "自动续约": "...",
+  "交付物/服务范围": "...",
+  "付款节奏": "...",
+  "验收标准": "...",
+  "违约金": "...",
+  "质保/维保期": "...",
+  "争议解决地": "...",
+  "保密期限": "...",
+  "知识产权归属": "...",
+  "发票/税率": "..."
+}
+
+合同文本：
+"""
+AI_SUMMARY_PROMPT = """请用200字以内概括以下合同的核心内容，包括：谁和谁签的、做什么、多少钱、多长时间、主要风险点。
+
+合同文本：
+"""
+AI_RISK_PROMPT = """请扫描以下合同中的风险条款，按严重程度分类（高风险/中风险/注意），每条风险包含：类别、严重程度、原文摘录、风险说明。
+
+以JSON数组格式返回，不要任何额外文字：
+[
+  {"category": "风险类别", "severity": "高风险/中风险/注意", "quote": "原文摘录", "description": "简要风险说明"},
+  ...
+]
+
+合同文本：
+"""
+
+
+def call_ai_api(
+    prompt: str,
+    api_key: str,
+    api_base: str = "https://api.deepseek.com",
+    model: str = "deepseek-chat",
+    temperature: float = 0.1,
+    max_tokens: int = 4000,
+) -> str | None:
+    """调用兼容 OpenAI 格式的 API，返回响应文本。"""
+    import requests as _requests
+
+    try:
+        resp = _requests.post(
+            f"{api_base.rstrip('/')}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "你是一个专业的合同审查助手，只返回要求的JSON格式，不返回任何额外内容。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return None
+
+
+def extract_fields_with_ai(
+    text: str,
+    api_key: str,
+    api_base: str = "https://api.deepseek.com",
+    model: str = "deepseek-chat",
+) -> dict[str, Any] | None:
+    """用 AI 提取合同字段，返回与 extract_all_fields 相同格式的字典。"""
+    full_text = text[:6000]  # 截断避免超 token
+    response = call_ai_api(AI_EXTRACTION_PROMPT + full_text, api_key, api_base, model)
+    if not response:
+        return None
+
+    # 清理可能的 ```json 包裹
+    response = response.strip()
+    if response.startswith("```"):
+        response = re.sub(r"^```(?:json)?\s*", "", response)
+        response = re.sub(r"\s*```$", "", response)
+
+    try:
+        ai_fields = _json.loads(response)
+    except _json.JSONDecodeError:
+        # 尝试提取 JSON 块
+        m = re.search(r"\{[\s\S]*\}", response)
+        if m:
+            try:
+                ai_fields = _json.loads(m.group())
+            except _json.JSONDecodeError:
+                return None
+        else:
+            return None
+
+    # 标准化字段名映射
+    field_map = {
+        "合同编号": "合同编号", "甲方": "甲方", "乙方": "乙方",
+        "合同金额": "合同金额", "签署日期": "签署日期", "签订地点": "签订地点",
+        "生效条件": "生效条件", "合同期限": "合同期限", "自动续约": "自动续约",
+        "交付物/服务范围": "交付物/服务范围", "交付物或服务范围": "交付物/服务范围",
+        "付款节奏": "付款节奏", "验收标准": "验收标准", "违约金": "违约金",
+        "质保/维保期": "质保/维保期", "质保或维保期": "质保/维保期",
+        "争议解决地": "争议解决地", "保密期限": "保密期限",
+        "知识产权归属": "知识产权归属", "发票/税率": "发票/税率", "发票类型或税率": "发票/税率",
+    }
+
+    result: dict[str, Any] = {}
+    for key in field_map.values():
+        result[key] = "未提取"
+
+    for ai_key, ai_val in ai_fields.items():
+        mapped = field_map.get(ai_key, ai_key)
+        if mapped in result:
+            result[mapped] = str(ai_val) if ai_val else "未提取"
+
+    return result
+
+
+def scan_risks_with_ai(
+    text: str,
+    api_key: str,
+    api_base: str = "https://api.deepseek.com",
+    model: str = "deepseek-chat",
+) -> list[dict[str, Any]] | None:
+    """用 AI 扫描风险条款。"""
+    full_text = text[:6000]
+    response = call_ai_api(AI_RISK_PROMPT + full_text, api_key, api_base, model)
+    if not response:
+        return None
+
+    response = response.strip()
+    if response.startswith("```"):
+        response = re.sub(r"^```(?:json)?\s*", "", response)
+        response = re.sub(r"\s*```$", "", response)
+
+    try:
+        ai_risks = _json.loads(response)
+        if not isinstance(ai_risks, list):
+            return None
+
+        result = []
+        for r in ai_risks:
+            sev = r.get("severity", "注意")
+            css = "risk-high" if "高" in sev else "risk-medium" if "中" in sev else "risk-low"
+            result.append({
+                "category": r.get("category", "风险条款"),
+                "severity": sev,
+                "css_class": css,
+                "description": r.get("description", ""),
+                "quote": r.get("quote", ""),
+                "matched": "",
+            })
+        return result
+    except (_json.JSONDecodeError, TypeError):
+        return None
+
+
+def generate_summary_with_ai(
+    text: str,
+    api_key: str,
+    api_base: str = "https://api.deepseek.com",
+    model: str = "deepseek-chat",
+) -> str | None:
+    """用 AI 生成合同摘要。"""
+    full_text = text[:4000]
+    response = call_ai_api(AI_SUMMARY_PROMPT + full_text, api_key, api_base, model)
+    return response
+
+
+# ═══════════════════════════════════════════════════════════
 #  第四部分：风险扫描
 # ═══════════════════════════════════════════════════════════
 
@@ -1469,6 +1679,13 @@ def render_full_card(filename: str, fields: dict[str, Any], risks: list[dict[str
 
 def render_unified_page():
     """统一审查页面：上传 N 份 → 输出 N 份卡片 + 对比总览。"""
+
+    # ── AI 模式配置 ──
+    use_ai = st.session_state.get("use_ai", False)
+    ai_key = st.session_state.get("ai_key", "")
+    ai_base = st.session_state.get("ai_base", "https://api.deepseek.com")
+    ai_model = st.session_state.get("ai_model", "deepseek-chat")
+
     st.header("📤 上传合同文件")
     uploaded_files = st.file_uploader(
         "支持 PDF / DOCX / TXT，可一次选多份",
@@ -1480,12 +1697,16 @@ def render_unified_page():
     )
 
     if not uploaded_files:
-        st.info("👆 上传合同文件，自动审查并生成决策卡片")
+        mode_hint = "🤖 AI增强模式 已开启" if use_ai else "📋 离线正则模式"
+        st.info(f"👆 上传合同文件，自动审查并生成决策卡片  |  {mode_hint}")
         col1, col2, col3 = st.columns(3)
         with col1:
             st.markdown("#### 📎 支持格式\nPDF · Word · TXT")
         with col2:
-            st.markdown("#### 🔍 18项字段提取\n金额/主体/期限/付款/违约/质保/验收/知识产权...")
+            feature_text = "#### 🤖 AI提取\n比正则更准，自动理解语义"
+            if not use_ai:
+                feature_text = "#### 🔍 18项字段提取\n金额/主体/期限/付款/违约/质保/验收/知识产权..."
+            st.markdown(feature_text)
         with col3:
             st.markdown("#### ⚠️ 10类风险扫描\n🔴 高风险 · 🟠 中风险 · 🟡 注意")
         return
@@ -1496,20 +1717,48 @@ def render_unified_page():
 
     # 处理所有文件
     all_results: list[dict[str, Any]] = []
-    progress = st.progress(0, "正在审查...")
+    progress = st.progress(0, "正在审查..." if not use_ai else "🤖 AI 正在分析...")
     status_text = st.empty()
 
+    ai_available = use_ai and ai_key
+
     for i, uf in enumerate(uploaded_files):
-        status_text.text(f"🔍 ({i+1}/{len(uploaded_files)}) {uf.name}")
+        status_text.text(f"{'🤖' if ai_available else '🔍'} ({i+1}/{len(uploaded_files)}) {uf.name}")
         try:
             file_bytes = uf.read()
             text = extract_text(file_bytes, uf.name)
             if text.startswith("[错误]") or text.startswith("[提示]"):
                 all_results.append({"filename": uf.name, "text": "", "fields": {}, "risks": [], "summary": text, "error": True})
             else:
-                fields = extract_all_fields(text)
-                risks = scan_risks(text)
-                summary = generate_summary(text)
+                fields: dict[str, Any] = {}
+                risks: list[dict[str, Any]] = []
+                summary: str = ""
+
+                if ai_available:
+                    # AI 模式：优先用 AI，失败回退正则
+                    ai_fields = extract_fields_with_ai(text, ai_key, ai_base, ai_model)
+                    if ai_fields:
+                        fields = ai_fields
+                    else:
+                        fields = extract_all_fields(text)
+
+                    ai_risks = scan_risks_with_ai(text, ai_key, ai_base, ai_model)
+                    if ai_risks:
+                        risks = ai_risks
+                    else:
+                        risks = scan_risks(text)
+
+                    ai_summary = generate_summary_with_ai(text, ai_key, ai_base, ai_model)
+                    if ai_summary:
+                        summary = ai_summary
+                    else:
+                        summary = generate_summary(text)
+                else:
+                    # 离线正则模式
+                    fields = extract_all_fields(text)
+                    risks = scan_risks(text)
+                    summary = generate_summary(text)
+
                 try:
                     save_review(uf.name, fields, risks, summary, text[:300])
                 except Exception:
@@ -1668,15 +1917,48 @@ def main():
     _inject_css()
 
     # 初始化
-    for k in ["selected_ids", "view_hist", "show_history"]:
+    for k in ["selected_ids", "view_hist", "show_history", "use_ai", "ai_key", "ai_base", "ai_model"]:
         if k not in st.session_state:
-            st.session_state[k] = [] if k == "selected_ids" else None
+            default_vals = {"selected_ids": [], "use_ai": False, "ai_key": "", 
+                          "ai_base": "https://api.deepseek.com", "ai_model": "deepseek-chat",
+                          "view_hist": None, "show_history": None}
+            st.session_state[k] = default_vals.get(k, None)
 
     # 侧边栏
     with st.sidebar:
         st.markdown("## 📄 ContractLens")
-        st.markdown("*合同速读助手 v2.0*")
+        st.markdown("*合同速读助手 v2.1*")
         st.markdown("---")
+
+        # AI 开关
+        st.session_state["use_ai"] = st.toggle(
+            "🤖 AI 增强模式",
+            value=st.session_state["use_ai"],
+            help="使用大模型提取字段，比正则更准；需填写 API Key",
+        )
+
+        if st.session_state["use_ai"]:
+            with st.expander("⚙️ AI 设置", expanded=not st.session_state["ai_key"]):
+                provider = st.selectbox("API 提供商", ["DeepSeek（推荐）", "OpenAI", "自定义"], index=0)
+                presets = {
+                    "DeepSeek（推荐）": ("https://api.deepseek.com", "deepseek-chat"),
+                    "OpenAI": ("https://api.openai.com", "gpt-4o-mini"),
+                }
+                default_base, default_model = presets.get(provider, ("", ""))
+
+                st.session_state["ai_base"] = st.text_input("API 地址", value=st.session_state["ai_base"] or default_base,
+                                                              placeholder="https://api.deepseek.com")
+                st.session_state["ai_model"] = st.text_input("模型名称", value=st.session_state["ai_model"] or default_model,
+                                                               placeholder="deepseek-chat")
+                st.session_state["ai_key"] = st.text_input(
+                    "API Key", type="password", value=st.session_state["ai_key"],
+                    placeholder="sk-xxxxxxxx",
+                    help="DeepSeek: platform.deepseek.com → API Keys"
+                )
+                if not st.session_state["ai_key"]:
+                    st.caption("💡 去 platform.deepseek.com 注册，新用户送免费额度")
+            st.markdown("---")
+
         if st.button("📋 审查历史", use_container_width=True):
             st.session_state["show_history"] = True
         if st.button("📄 返回审查", use_container_width=True):
