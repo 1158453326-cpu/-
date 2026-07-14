@@ -1603,8 +1603,8 @@ def generate_pdf(
 # ═══════════════════════════════════════════════════════════
 
 def render_full_card(filename: str, fields: dict[str, Any], risks: list[dict[str, Any]],
-                     summary: str, text: str, prefix: str = ""):
-    """渲染单份合同的完整决策卡片。"""
+                     text: str, prefix: str = ""):
+    """渲染单份合同的完整决策卡片（全部展开，无折叠）。"""
     risk_count = len(risks)
     high_count = sum(1 for r in risks if "高风险" in r.get("severity", ""))
     mid_count = sum(1 for r in risks if "中风险" in r.get("severity", ""))
@@ -1634,32 +1634,39 @@ def render_full_card(filename: str, fields: dict[str, Any], risks: list[dict[str
             st.markdown(f"""<div class="metric-card"><div class="label">合同期限</div>
                          <div class="value" style="font-size:13px;">{term_val[:25]}</div></div>""", unsafe_allow_html=True)
 
-        # 完整字段
-        with st.expander("📋 完整字段", expanded=False):
-            rows = []
-            for k, v in fields.items():
-                rows.append({"字段": k, "提取结果": v})
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        # ── 完整字段表格（直接展开） ──
+        st.markdown("#### 📋 完整字段")
+        rows = [{"字段": k, "提取结果": v} for k, v in fields.items()]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        # 风险
+        # ── 风险条款（直接展开，带判定条件） ──
+        st.markdown(f"#### ⚠️ 风险条款（{risk_count} 条）")
         if risks:
-            with st.expander(f"⚠️ 风险条款（{risk_count} 条）", expanded=(high_count > 0)):
-                for r in risks:
-                    st.markdown(f"""<div class="{r.get('css_class','risk-low')}">
-                    <strong>{r.get('severity','')} · {r.get('category','')}</strong>
-                    <div class="risk-quote">📌 {r.get('quote','')[:200]}</div></div>""", unsafe_allow_html=True)
+            for r in risks:
+                severity = r.get("severity", "")
+                category = r.get("category", "")
+                description = r.get("description", "")
+                matched = r.get("matched", "")
+                quote = r.get("quote", "")[:250]
+
+                # 判定条件：取匹配关键词或风险说明
+                criteria = matched if matched else description
+
+                st.markdown(f"""<div class="{r.get('css_class','risk-low')}">
+                    <strong>{severity} · {category}</strong>
+                    <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+                        🎯 判定条件：{criteria}
+                    </div>
+                    <div class="risk-quote" style="margin-top:6px;">📌 原文：{quote}</div>
+                </div>""", unsafe_allow_html=True)
         else:
-            with st.expander("⚠️ 风险条款（0 条）", expanded=False):
-                st.success("✅ 未检测到明显风险")
+            st.success("✅ 未检测到明显风险")
 
-        # 摘要
-        with st.expander("📝 合同摘要", expanded=False):
-            st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
-
-        # 导出
+        # ── 导出按钮 ──
+        st.markdown("#### 📥 导出")
         col_x1, col_x2, _ = st.columns([1, 1, 4])
         with col_x1:
-            pdf_data = generate_pdf(filename, fields, risks, summary)
+            pdf_data = generate_pdf(filename, fields, risks, "")
             if pdf_data is not None:
                 st.download_button("📥 PDF", pdf_data, f"ContractLens_{Path(filename).stem}.pdf", "application/pdf",
                                    key=f"pdf_{prefix}", use_container_width=True)
@@ -1668,7 +1675,7 @@ def render_full_card(filename: str, fields: dict[str, Any], risks: list[dict[str
             with pd.ExcelWriter(excel_buf, engine="openpyxl") as w:
                 pd.DataFrame([{"字段": k, "结果": v} for k, v in fields.items()]).to_excel(w, sheet_name="字段", index=False)
                 if risks:
-                    pd.DataFrame([{"程度": r.get("severity"), "类别": r.get("category"), "原文": r.get("quote")} for r in risks]).to_excel(w, sheet_name="风险", index=False)
+                    pd.DataFrame([{"程度": r.get("severity"), "类别": r.get("category"), "判定条件": r.get("matched") or r.get("description"), "原文": r.get("quote")} for r in risks]).to_excel(w, sheet_name="风险", index=False)
             excel_buf.seek(0)
             st.download_button("📥 Excel", excel_buf, f"ContractLens_{Path(filename).stem}.xlsx",
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1760,7 +1767,7 @@ def render_unified_page():
                     summary = generate_summary(text)
 
                 try:
-                    save_review(uf.name, fields, risks, summary, text[:300])
+                    save_review(uf.name, fields, risks, "", text[:300])
                 except Exception:
                     pass
                 all_results.append({"filename": uf.name, "text": text, "fields": fields, "risks": risks, "summary": summary, "error": False})
@@ -1808,7 +1815,7 @@ def render_unified_page():
 
     # ── 逐个决策卡片 ──
     for i, r in enumerate(valid):
-        render_full_card(r["filename"], r["fields"], r["risks"], r["summary"], r["text"], prefix=str(i))
+        render_full_card(r["filename"], r["fields"], r["risks"], r["text"], prefix=str(i))
 
     # ── 错误文件 ──
     errors = [r for r in all_results if r["error"]]
