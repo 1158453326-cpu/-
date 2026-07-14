@@ -370,13 +370,11 @@ def render_email_settings() -> dict[str, Any]:
             port = st.number_input("端口", value=cfg["port"], min_value=1, max_value=65535)
         use_ssl = cfg["use_ssl"]
 
-        sender = st.text_input("你的邮箱", placeholder="your_email@qq.com")
+        sender = st.text_input("你的邮箱", placeholder="your_email@qq.com",
+                               help="审查报告将发到这个邮箱")
         password = st.text_input("邮箱授权码", type="password",
                                  placeholder="QQ邮箱→设置→账户→POP3/SMTP服务→生成授权码",
                                  help="不是邮箱密码！QQ邮箱在 设置→账户→POP3/SMTP服务 里生成")
-        # 默认发给自己，也可改
-        recipient = st.text_input("收件邮箱（默认发给自己）", placeholder="留空则发到自己的邮箱",
-                                  help="默认与发件邮箱相同，留空即可")
 
         return {
             "server": server,
@@ -384,7 +382,7 @@ def render_email_settings() -> dict[str, Any]:
             "use_ssl": use_ssl,
             "sender": sender,
             "password": password,
-            "recipient": recipient if recipient.strip() else sender,
+            "recipient": sender,  # 就发给自己
         }
 
 
@@ -889,6 +887,21 @@ def extract_invoice(text: str) -> str:
     return "未提取"
 
 
+def extract_ops_period(text: str) -> str:
+    """提取运维服务期限。"""
+    patterns = [
+        r"(?:运维|维护|运营).*?期[间限][：:：]?\s*([^\n。；;]{3,80})",
+        r"(?:运维|维护|运营).*?(\d+\s*(?:个)?[月年])",
+        r"(?:免费.*?运维|免费.*?维护|售后.*?服务).*?(\d+\s*(?:个)?[月年])",
+        r"(?:运维|维护|运营).*?服务.*?期[：:：]?\s*([^\n。；;]{3,60})",
+    ]
+    for pat in patterns:
+        val = safe_search(pat, text, 1)
+        if val and len(val) > 2:
+            return val[:80]
+    return "未提取"
+
+
 def extract_all_fields(text: str) -> dict[str, Any]:
     """一次性提取所有关键字段（产品经理视角全覆盖）。"""
     parties = extract_parties(text)
@@ -907,6 +920,7 @@ def extract_all_fields(text: str) -> dict[str, Any]:
     acceptance = extract_acceptance(text)
     ip_ownership = extract_ip_ownership(text)
     invoice = extract_invoice(text)
+    ops_period = extract_ops_period(text)
 
     return {
         "合同编号": contract_no,
@@ -923,6 +937,7 @@ def extract_all_fields(text: str) -> dict[str, Any]:
         "验收标准": acceptance,
         "违约金": penalty,
         "质保/维保期": warranty,
+        "运维服务期限": ops_period,
         "争议解决地": dispute,
         "保密期限": confidentiality,
         "知识产权归属": ip_ownership,
@@ -953,6 +968,7 @@ AI_EXTRACTION_PROMPT = """你是一个专业的合同审查助手。请从以下
 - 验收标准
 - 违约金（具体数字或计算方式）
 - 质保或维保期
+- 运维服务期限
 - 争议解决地（城市+机构）
 - 保密期限
 - 知识产权归属
@@ -974,6 +990,7 @@ AI_EXTRACTION_PROMPT = """你是一个专业的合同审查助手。请从以下
   "验收标准": "...",
   "违约金": "...",
   "质保/维保期": "...",
+  "运维服务期限": "...",
   "争议解决地": "...",
   "保密期限": "...",
   "知识产权归属": "...",
@@ -1073,6 +1090,7 @@ def extract_fields_with_ai(
         "交付物/服务范围": "交付物/服务范围", "交付物或服务范围": "交付物/服务范围",
         "付款节奏": "付款节奏", "验收标准": "验收标准", "违约金": "违约金",
         "质保/维保期": "质保/维保期", "质保或维保期": "质保/维保期",
+        "运维服务期限": "运维服务期限",
         "争议解决地": "争议解决地", "保密期限": "保密期限",
         "知识产权归属": "知识产权归属", "发票/税率": "发票/税率", "发票类型或税率": "发票/税率",
     }
@@ -1712,7 +1730,7 @@ def render_unified_page():
         with col2:
             feature_text = "#### 🤖 AI提取\n比正则更准，自动理解语义"
             if not use_ai:
-                feature_text = "#### 🔍 18项字段提取\n金额/主体/期限/付款/违约/质保/验收/知识产权..."
+                feature_text = "#### 🔍 19项字段提取\n金额/主体/期限/付款/违约/质保/验收/运维/知识产权..."
             st.markdown(feature_text)
         with col3:
             st.markdown("#### ⚠️ 10类风险扫描\n🔴 高风险 · 🟠 中风险 · 🟡 注意")
@@ -1971,8 +1989,8 @@ def main():
         if st.button("📄 返回审查", use_container_width=True):
             st.session_state["show_history"] = False
         st.markdown("---")
-        st.markdown("### 📋 提取字段（18项）")
-        st.markdown("合同编号 · 甲方 · 乙方 · 金额 · 日期 · 签订地 · 生效条件 · 期限 · 自动续约 · 付款 · 交付物 · 验收 · 违约金 · 质保 · 争议解决 · 保密 · 知识产权 · 发票")
+        st.markdown("### 📋 提取字段（19项）")
+        st.markdown("合同编号 · 甲方 · 乙方 · 金额 · 日期 · 签订地 · 生效条件 · 期限 · 自动续约 · 付款 · 交付物 · 验收 · 违约金 · 质保 · 运维期限 · 争议解决 · 保密 · 知识产权 · 发票")
         st.markdown("### ⚠️ 风险扫描（10类）")
         st.markdown("单方免责 · 加重责任 · 知识产权 · 模糊条款 · 管辖不利 · 违约金过高 · 付款苛刻 · 自动续约 · 保密过长 · 不可抗力")
 
