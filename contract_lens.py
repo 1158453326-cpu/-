@@ -110,7 +110,7 @@ def _inject_css():
 #  第〇部分：持久化设置（API Key 等）
 # ═══════════════════════════════════════════════════════════
 
-SETTINGS_FILE = HISTORY_DIR.parent / "settings.json"
+SETTINGS_FILE: Path = Path(__file__).parent / "settings.json"
 
 
 def load_settings() -> dict[str, Any]:
