@@ -27,6 +27,9 @@ Thumbs.db
 # Review history (local data)
 history/
 
+# Settings (contains API keys)
+settings.json
+
 # Temp
 *.tmp
 *.log

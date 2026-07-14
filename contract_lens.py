@@ -107,7 +107,34 @@ def _inject_css():
 
 
 # ═══════════════════════════════════════════════════════════
-#  第〇部分：审查历史管理
+#  第〇部分：持久化设置（API Key 等）
+# ═══════════════════════════════════════════════════════════
+
+SETTINGS_FILE = HISTORY_DIR.parent / "settings.json"
+
+
+def load_settings() -> dict[str, Any]:
+    """加载持久化设置。"""
+    try:
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return _json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_settings(data: dict[str, Any]) -> None:
+    """保存设置到文件。"""
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════
+#  第〇·一：审查历史管理
 # ═══════════════════════════════════════════════════════════
 
 import json
@@ -1871,55 +1898,72 @@ def render_unified_page():
 
 
 def render_history_page():
-    """审查历史（从统一页面侧边栏进入）。"""
+    """审查历史（完整展示字段+风险+判定条件）。"""
     st.header("📋 审查历史")
     records = load_all_reviews()
     if not records:
         st.info("📭 暂无记录")
         return
 
-    sel = st.session_state.get("selected_ids", [])
-    st.caption(f"共 {len(records)} 条 · 选中 {len(sel)} 条")
+    st.caption(f"共 {len(records)} 条")
 
     for r in records:
         rid = r["id"]
+        fields = r.get("fields", {})
+        risks = r.get("risks", [])
+        risk_count = r.get("risk_count", len(risks))
+        high_c = r.get("high_risk", sum(1 for x in risks if "高风险" in x.get("severity", "")))
+        mid_c = r.get("mid_risk", sum(1 for x in risks if "中风险" in x.get("severity", "")))
+        low_c = r.get("low_risk", sum(1 for x in risks if "注意" in x.get("severity", "")))
+
         with st.container():
-            c1, c2 = st.columns([8, 2])
-            with c1:
-                amt = r.get("fields",{}).get("合同金额","—")
-                st.markdown(f"**{r['filename']}**  <small>{r.get('timestamp','')}</small><br>"
-                           f"<small>{r.get('fields',{}).get('甲方','')[:20]} | {amt} | 🔴{r.get('high_risk',0)} 🟠{r.get('mid_risk',0)} 🟡{r.get('low_risk',0)}</small>",
-                           unsafe_allow_html=True)
-            with c2:
-                if st.button("📖", key=f"hv_{rid}"):
-                    st.session_state["view_hist"] = rid
-                    st.rerun()
-                if st.button("🗑️", key=f"hd_{rid}"):
-                    delete_review(rid)
-                    st.rerun()
+            st.markdown(f"### 📄 {r['filename']}")
+            st.caption(f"{r.get('timestamp','')} · 🔴{high_c} 🟠{mid_c} 🟡{low_c}")
 
-    if sel:
-        if st.button(f"🗑️ 删除选中 {len(sel)} 条", type="primary"):
-            for rid in sel:
+            # 核心四指标
+            col_a, col_b, col_c, col_d = st.columns(4)
+            with col_a:
+                st.markdown(f"""<div class="metric-card"><div class="label">甲方</div>
+                            <div class="value" style="font-size:14px;">{fields.get('甲方','—')[:20]}</div></div>""", unsafe_allow_html=True)
+            with col_b:
+                st.markdown(f"""<div class="metric-card"><div class="label">乙方</div>
+                            <div class="value" style="font-size:14px;">{fields.get('乙方','—')[:20]}</div></div>""", unsafe_allow_html=True)
+            with col_c:
+                amt = fields.get("合同金额", "—").replace("¥", "")
+                st.markdown(f"""<div class="metric-card"><div class="label">合同金额</div>
+                            <div class="value amount">{amt}</div></div>""", unsafe_allow_html=True)
+            with col_d:
+                st.markdown(f"""<div class="metric-card"><div class="label">合同期限</div>
+                            <div class="value" style="font-size:13px;">{fields.get('合同期限','—')[:25]}</div></div>""", unsafe_allow_html=True)
+
+            # 字段表格
+            rows = [{"字段": k, "提取结果": v} for k, v in fields.items()]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # 风险条款（完整展示）
+            if risks:
+                st.markdown(f"**⚠️ 风险条款（{risk_count} 条）**")
+                for risk in risks:
+                    sev = risk.get("severity", "")
+                    cat = risk.get("category", "")
+                    desc = risk.get("description", "")
+                    matched = risk.get("matched", "")
+                    quote = risk.get("quote", "")[:200]
+                    criteria = matched if matched else desc
+                    st.markdown(f"""<div class="{risk.get('css_class','risk-low')}">
+                        <strong>{sev} · {cat}</strong>
+                        <div style="font-size:12px;color:#6b7280;">🎯 判定条件：{criteria}</div>
+                        <div class="risk-quote">📌 {quote}</div>
+                    </div>""", unsafe_allow_html=True)
+
+            # 删除按钮
+            if st.button("🗑️ 删除此记录", key=f"hdel_{rid}"):
                 delete_review(rid)
-            st.session_state["selected_ids"] = []
-            st.rerun()
-
-    # 详情
-    vid = st.session_state.get("view_hist")
-    if vid:
-        d = load_review(vid)
-        if d:
-            st.markdown("---")
-            st.subheader(d["filename"])
-            for k, v in d.get("fields", {}).items():
-                st.text(f"{k}: {v}")
-            if st.button("✕ 关闭"):
-                st.session_state.pop("view_hist", None)
                 st.rerun()
 
+            st.markdown("---")
+
     # 导出导入
-    st.markdown("---")
     col_e, col_i = st.columns(2)
     with col_e:
         st.download_button("📥 导出历史 JSON", export_all_reviews(),
@@ -1941,26 +1985,38 @@ def main():
     """ContractLens 统一审查页面。"""
     _inject_css()
 
-    # 初始化
-    for k in ["selected_ids", "view_hist", "show_history", "use_ai", "ai_key", "ai_base", "ai_model"]:
+    # 加载持久化设置
+    saved_settings = load_settings()
+
+    # 初始化 session state（优先用持久化的值）
+    defaults = {
+        "selected_ids": [], "view_hist": None, "show_history": None,
+        "use_ai": saved_settings.get("use_ai", False),
+        "ai_key": saved_settings.get("ai_key", ""),
+        "ai_base": saved_settings.get("ai_base", "https://api.deepseek.com"),
+        "ai_model": saved_settings.get("ai_model", "deepseek-chat"),
+    }
+    for k, v in defaults.items():
         if k not in st.session_state:
-            default_vals = {"selected_ids": [], "use_ai": False, "ai_key": "", 
-                          "ai_base": "https://api.deepseek.com", "ai_model": "deepseek-chat",
-                          "view_hist": None, "show_history": None}
-            st.session_state[k] = default_vals.get(k, None)
+            st.session_state[k] = v
 
     # 侧边栏
     with st.sidebar:
         st.markdown("## 📄 ContractLens")
-        st.markdown("*合同速读助手 v2.1*")
+        st.markdown("*合同速读助手 v2.2*")
         st.markdown("---")
 
         # AI 开关
-        st.session_state["use_ai"] = st.toggle(
+        use_ai = st.toggle(
             "🤖 AI 增强模式",
             value=st.session_state["use_ai"],
             help="使用大模型提取字段，比正则更准；需填写 API Key",
+            key="toggle_ai",
         )
+        if use_ai != st.session_state["use_ai"]:
+            st.session_state["use_ai"] = use_ai
+            save_settings({"use_ai": use_ai, "ai_key": st.session_state["ai_key"],
+                          "ai_base": st.session_state["ai_base"], "ai_model": st.session_state["ai_model"]})
 
         if st.session_state["use_ai"]:
             with st.expander("⚙️ AI 设置", expanded=not st.session_state["ai_key"]):
@@ -1971,15 +2027,20 @@ def main():
                 }
                 default_base, default_model = presets.get(provider, ("", ""))
 
-                st.session_state["ai_base"] = st.text_input("API 地址", value=st.session_state["ai_base"] or default_base,
-                                                              placeholder="https://api.deepseek.com")
-                st.session_state["ai_model"] = st.text_input("模型名称", value=st.session_state["ai_model"] or default_model,
-                                                               placeholder="deepseek-chat")
-                st.session_state["ai_key"] = st.text_input(
-                    "API Key", type="password", value=st.session_state["ai_key"],
-                    placeholder="sk-xxxxxxxx",
-                    help="DeepSeek: platform.deepseek.com → API Keys"
-                )
+                new_base = st.text_input("API 地址", value=st.session_state["ai_base"] or default_base,
+                                         placeholder="https://api.deepseek.com")
+                new_model = st.text_input("模型名称", value=st.session_state["ai_model"] or default_model,
+                                          placeholder="deepseek-chat")
+                new_key = st.text_input("API Key", type="password", value=st.session_state["ai_key"],
+                                        placeholder="sk-xxxxxxxx")
+
+                if new_base != st.session_state["ai_base"] or new_model != st.session_state["ai_model"] or new_key != st.session_state["ai_key"]:
+                    st.session_state["ai_base"] = new_base
+                    st.session_state["ai_model"] = new_model
+                    st.session_state["ai_key"] = new_key
+                    save_settings({"use_ai": st.session_state["use_ai"], "ai_key": new_key,
+                                  "ai_base": new_base, "ai_model": new_model})
+
                 if not st.session_state["ai_key"]:
                     st.caption("💡 去 platform.deepseek.com 注册，新用户送免费额度")
             st.markdown("---")
